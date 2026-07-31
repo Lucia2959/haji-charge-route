@@ -85,13 +85,25 @@ try:
 except QuotaExceeded:
     pass
 
-# 7) EV 지속 429 → RateLimited (본문 코드22만 QuotaExceeded)
+# 7) EV 지속 429(근거 없음) → RateLimited
 def h7(req):
     return httpx.Response(429)
 try:
     run(lambda: ev_stations._get_with_retry({"a": 1}), h7)
-    raise AssertionError("EV 지속 429는 RateLimited 여야 함")
+    raise AssertionError("근거 없는 지속 429는 RateLimited 여야 함")
 except RateLimited:
     pass
+
+# 8) EV 429 + 본문 "API token quota exceeded" → QuotaExceeded (실제 관측된 형태)
+#    상태코드만 보면 일시제한으로 오판해 "잠시 후 재시도"를 안내하게 된다.
+n8 = {"c": 0}
+def h8(req):
+    n8["c"] += 1
+    return httpx.Response(429, text="API token quota exceeded\n")
+try:
+    run(lambda: ev_stations._get_with_retry({"a": 1}), h8)
+    raise AssertionError("쿼터 소진 본문이면 QuotaExceeded 여야 함")
+except QuotaExceeded:
+    assert n8["c"] == 1, f"쿼터 소진은 재시도 없이 즉시 중단해야 함 (시도 {n8['c']}회)"
 
 print("OK — 외부 연계 안정성: 재시도/백오프, 쿼터소진(코드22)과 일시제한(429) 구분, 4xx 즉시반환, 전송오류 raise")

@@ -143,21 +143,36 @@ def _output_kw(output: str | None, charge_type: str) -> float:
         return _DEFAULT_POWER_KW[charge_type]
 
 
-# data.go.kr 트래픽/호출 초과 신호(HTTP 200 본문에 담겨오기도 함).
-#   returnReasonCode 22 = LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR
-_QUOTA_MARKERS = ("LIMITED_NUMBER_OF_SERVICE_REQUESTS", "<returnReasonCode>22", "<resultCode>22")
+# data.go.kr 쿼터 소진 신호. 두 가지 형태로 온다(실측 확인).
+#   (a) HTTP 200 + XML  returnReasonCode 22 = LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR
+#   (b) HTTP 429 + text/plain  "API token quota exceeded"   ← 게이트웨이 레벨
+# (b)를 상태코드만 보고 '일시적 과다호출'로 처리하면, 실제로는 그날 회복되지 않는데
+# "잠시 후 다시 시도"라고 잘못 안내하게 된다 → 본문까지 확인해 구분한다.
+_QUOTA_MARKERS = (
+    "LIMITED_NUMBER_OF_SERVICE_REQUESTS",
+    "<returnReasonCode>22",
+    "<resultCode>22",
+    "quota exceeded",
+)
+
+
+def _is_quota_body(text: str) -> bool:
+    low = text.lower()
+    return any(m.lower() in low for m in _QUOTA_MARKERS)
 
 
 async def _get_with_retry(params: dict) -> httpx.Response:
-    """공유 클라이언트로 조회. 429는 백오프 재시도, 지속 429는 사용량 초과로 승격."""
+    """공유 클라이언트로 조회. 429는 백오프 재시도하되, 쿼터 소진이면 즉시 중단."""
     for attempt in range(_MAX_RETRY):
         r = await _http().get(f"{EV_API_BASE}/getChargerInfo", params=params, timeout=20)
         if r.status_code == 429:
+            # 쿼터 소진은 재시도해도 소용없다 → 백오프 낭비 없이 즉시 알린다.
+            if _is_quota_body(r.text):
+                raise QuotaExceeded("ev")
             if attempt < _MAX_RETRY - 1:
                 await asyncio.sleep(0.6 * (attempt + 1))
                 continue
-            # 429는 "단시간 과다호출"이지 쿼터 소진이 아니다(소진은 본문 코드 22).
-            raise RateLimited("ev")
+            raise RateLimited("ev")  # 본문에 근거 없는 429 = 단시간 과다호출
         r.raise_for_status()
         return r
     raise RateLimited("ev")  # 방어적(도달 불가)
@@ -181,8 +196,8 @@ async def _fetch_rows(zcode: str, zscode: str | None = None) -> list[dict]:
         if zscode:
             params["zscode"] = zscode
         r = await _get_with_retry(params)
-        if any(m in r.text for m in _QUOTA_MARKERS):
-            raise QuotaExceeded("ev")  # 무료 사용량 초과/과금(HTTP 200 본문 오류 포함)
+        if _is_quota_body(r.text):
+            raise QuotaExceeded("ev")  # HTTP 200 본문에 담겨오는 쿼터 소진
         root = ET.fromstring(r.text)
         page_items = root.findall(".//item")
         for it in page_items:
