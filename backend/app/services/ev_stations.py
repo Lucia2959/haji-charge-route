@@ -91,6 +91,8 @@ _kakao_sem = asyncio.Semaphore(_KAKAO_CONCURRENCY)
 
 # 위치 카탈로그: zcode → (ts, 충전소 목록). 상태는 여기 포함 안 함.
 _catalog_cache: dict[str, tuple[float, list[StationSummary]]] = {}
+# 진행 중인 카탈로그 조회(시군구별). 동시 요청이 같은 조회를 공유해 중복 호출을 막는다.
+_catalog_inflight: dict[str, "asyncio.Task[list[StationSummary]]"] = {}
 # 실시간 상태: "zcode:zscode" → (ts, 원본 로우). 상세 진입 시에만 채움.
 _status_cache: dict[str, tuple[float, list[dict]]] = {}
 # statId → (zcode, zscode). 카탈로그 조회 시 채워, 상세를 시군구 단위로 좁힘.
@@ -211,16 +213,11 @@ async def _fetch_rows(zcode: str, zscode: str | None = None) -> list[dict]:
     return rows
 
 
-async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
-    """시군구(zcode+zscode) 위치 카탈로그 — 장기 캐시. 상태는 포함하지 않는다."""
-    key = f"{zcode}:{zscode}"
-    now = time.monotonic()
-    cached = _catalog_cache.get(key)
-    if cached and now - cached[0] < _CATALOG_TTL:
-        return cached[1]
-
+async def _fetch_catalog(key: str, zcode: str, zscode: str) -> list[StationSummary]:
+    """실제 카탈로그 조회 + 캐시 적재 (in-flight 공유 대상)."""
     async with _fetch_sem:  # 동시 호출 상한
         rows = await _fetch_rows(zcode, zscode)
+    now = time.monotonic()
     stations = list(_group_stations(rows).values())
     for row in rows:  # 상세를 시군구 단위로 좁히기 위한 매핑
         sid = row.get("statId")
@@ -232,6 +229,29 @@ async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
     # 이후엔 정상적으로 실시간 재조회된다.
     _status_cache[key] = (now, rows)
     return stations
+
+
+async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
+    """시군구(zcode+zscode) 위치 카탈로그 — 장기 캐시. 상태는 포함하지 않는다.
+
+    같은 시군구를 동시에 요청하면(예: 워밍업과 사용자 계산이 겹칠 때) 하나의 조회를
+    공유한다. 없으면 같은 데이터를 중복으로 받아 응답도 느려지고 API 쿼터도 두 배로
+    쓴다(400km 경로 하나가 시군구 20여 개를 부르므로 체감이 크다).
+    """
+    key = f"{zcode}:{zscode}"
+    cached = _catalog_cache.get(key)
+    if cached and time.monotonic() - cached[0] < _CATALOG_TTL:
+        return cached[1]
+
+    inflight = _catalog_inflight.get(key)
+    if inflight is None:
+        inflight = asyncio.create_task(_fetch_catalog(key, zcode, zscode))
+        _catalog_inflight[key] = inflight
+        try:
+            return await inflight
+        finally:
+            _catalog_inflight.pop(key, None)
+    return await inflight  # 진행 중인 동일 조회에 편승
 
 
 def _evict_expired_status(now: float) -> None:

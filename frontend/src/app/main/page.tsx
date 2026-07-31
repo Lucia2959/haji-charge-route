@@ -17,6 +17,7 @@ import {
   savePlan,
   saveShortcuts,
   SHORTCUT_SLOTS,
+  warmupRoute,
   type ShortcutItem,
 } from "@/lib/api";
 import type { RoutePlanResponse } from "@/lib/types";
@@ -67,6 +68,11 @@ export default function MainPage() {
     if (p) setPlan(p);
     setShortcuts(loadShortcuts()); // 즐겨찾기는 기기(localStorage)에서만 읽는다
     setHydrated(true);
+    // 복원된 경로가 있으면 충전소 캐시를 미리 데운다(백그라운드). 계산 버튼을 누를
+    // 때쯤이면 캐시가 채워져 있어 대기가 크게 줄어든다.
+    if (f?.origin.value && f?.destination.value) {
+      warmupRoute(f.origin.value, f.destination.value);
+    }
   }, []);
 
   // 즐겨찾기 슬롯 지정/삭제 — 주소는 기기에만 저장

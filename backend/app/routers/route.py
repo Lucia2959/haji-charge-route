@@ -24,6 +24,25 @@ from ..models import LatLng, StationSummary
 router = APIRouter(prefix="/api/route", tags=["route"])
 
 
+@router.post("/warmup")
+async def warmup(req: RoutePlanRequest) -> dict:
+    """경로에 필요한 충전소 카탈로그를 미리 데운다(계획은 하지 않는다).
+
+    콜드 상태의 계획 요청은 시군구 20여 곳의 카탈로그를 받느라 대부분의 시간을 쓴다.
+    앱을 열 때 이 엔드포인트를 미리 호출해두면, 사용자가 '계산'을 누를 때는 캐시가
+    채워져 있어 대기가 크게 줄어든다. 실패해도 계획에는 영향이 없으므로 조용히 무시한다.
+    """
+    try:
+        origin = await kakao.geocode(req.origin)
+        dest = await kakao.geocode(req.destination)
+        directions = await kakao.get_directions(origin, dest)
+        stations = await ev_stations.stations_near_path(directions["path"])
+        return {"ok": True, "stations": len(stations)}
+    except Exception:
+        # 워밍업은 실패해도 무해 — 사용자 요청 흐름을 막지 않는다.
+        return {"ok": False, "stations": 0}
+
+
 @router.post("/plan", response_model=RoutePlanResponse)
 async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
     """출발지·도착지·현충전량 → 경로 + (외부환경 보정) 충전예상지점수 계산."""

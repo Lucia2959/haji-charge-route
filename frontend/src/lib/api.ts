@@ -40,25 +40,35 @@ async function errText(res: Response, fallback: string): Promise<string> {
 
 // 모든 서버호출의 공통 진입점. 타임아웃이 없으면 백엔드 무응답 시 무한 대기가 되고,
 // fetch 실패는 "Failed to fetch" 영어 원문이 그대로 화면에 노출된다 → 한국어로 변환.
+// 일반 조회는 20초면 충분하지만, 경로계산은 다르다. 캐시가 비어 있으면 경로가 지나는
+// 시군구 20여 곳의 충전소 목록을 외부 API에서 받아오느라 실측 50초까지 걸린다.
+// 20초로 끊으면 서버는 정상 처리 중인데 화면엔 "서버 연결 오류"가 뜬다.
 const TIMEOUT_MS = 20_000;
+const PLAN_TIMEOUT_MS = 120_000;
 
 // 백엔드 공유 시크릿(설정된 경우). 번들에 노출되므로 사람 대상 인증이 아니라,
 // URL을 모르는 봇·스캐너가 백엔드를 직접 두드려 외부 API 쿼터를 태우는 것을 막는 용도.
 const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
 
-async function req(url: string, init?: RequestInit): Promise<Response> {
+async function req(
+  url: string,
+  init?: RequestInit,
+  timeoutMs: number = TIMEOUT_MS
+): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (API_TOKEN) headers.set("X-Haji-Key", API_TOKEN);
   try {
     return await fetch(url, {
       ...init,
       headers,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     const name = (e as Error)?.name;
     if (name === "TimeoutError" || name === "AbortError") {
-      throw new Error("서버 응답이 20초를 넘었습니다. 잠시 후 다시 시도해 주세요.");
+      throw new Error(
+        `서버 응답이 ${Math.round(timeoutMs / 1000)}초를 넘었습니다. 잠시 후 다시 시도해 주세요.`
+      );
     }
     throw new Error("서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.");
   }
@@ -81,15 +91,42 @@ export async function planRoute(
 ): Promise<RoutePlanResponse> {
   return withLoading(
     (async () => {
-      const res = await req(`${API_BASE}/api/route/plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await req(
+        `${API_BASE}/api/route/plan`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        PLAN_TIMEOUT_MS
+      );
       if (!res.ok) throw new Error(await errText(res, "경로 계산 실패"));
       return res.json();
     })()
   );
+}
+
+/** 앱 진입 시 백그라운드로 충전소 캐시를 데운다(계획은 안 함).
+ *  계산 버튼을 누를 때의 대기를 줄이는 용도라, 실패해도 조용히 무시한다. */
+export function warmupRoute(origin: string, destination: string): void {
+  if (!origin || !destination) return;
+  // withLoading으로 감싸지 않는다 — 사용자가 보는 로딩 오버레이를 띄우면 안 됨.
+  req(
+    `${API_BASE}/api/route/warmup`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        origin,
+        destination,
+        current_charge_pct: 50,
+        temperature_c: 20,
+      }),
+    },
+    PLAN_TIMEOUT_MS
+  ).catch(() => {
+    /* 워밍업 실패는 무해 */
+  });
 }
 
 export async function getCurrentTemperature(
