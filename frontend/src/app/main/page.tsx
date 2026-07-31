@@ -336,6 +336,23 @@ export default function MainPage() {
             <span className="text-[12px] leading-relaxed text-orange-600">
               {plan.origin_precharge.reason}
             </span>
+            {plan.origin_precharge.station && (
+              <button
+                onClick={() =>
+                  router.push(`/stations/${plan.origin_precharge!.station!.station_id}`)
+                }
+                className="mt-1.5 flex items-center gap-1.5 self-start rounded-lg bg-white px-2.5 py-1.5 text-[12px] ring-1 ring-orange-200 hover:bg-orange-50"
+              >
+                <span className="text-slate-500">출발지 근처</span>
+                <span className="font-semibold text-[var(--byd-primary)] underline decoration-dotted decoration-emerald-400 underline-offset-2">
+                  {plan.origin_precharge.station.station_name}
+                </span>
+                <span className="text-emerald-700">
+                  · {plan.origin_precharge.station.status_reason}
+                </span>
+                <span className="text-slate-500">›</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -397,6 +414,16 @@ export default function MainPage() {
             주행 {plan.duration_min}분 + 충전·정차 {plan.total_charge_min}분
             {plan.plan_method === "dp" && " · 충전커브 시간최적화(DP)"}
           </p>
+
+          {!plan.feasible && (
+            <p
+              role="alert"
+              className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-red-200"
+            >
+              ⚠ 현재 충전량과 경로상 충전 인프라로는 목적지까지 안전하게 완주하기
+              어렵습니다. 출발 전 충전을 권장합니다.
+            </p>
+          )}
 
           {/* 경로 흐름 시각화 (출발지 차량 → 충전소 → 목적지, SoC·구간소비) */}
           <div className="mt-4">
@@ -507,12 +534,6 @@ export default function MainPage() {
                 </button>
               )}
 
-              {!plan.feasible && (
-                <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
-                  ⚠ 경로상 도달 가능한 충전소로는 목적지까지 완주가 어렵습니다. 도달
-                  가능한 지점까지만 표시합니다.
-                </p>
-              )}
             </div>
           )}
 

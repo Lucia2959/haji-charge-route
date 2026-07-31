@@ -115,15 +115,19 @@ def _charge_minutes(
 # 여기 앵커는 0.61). 인증은 예열된 차량으로 짧은 표준 사이클을 도는 시험이라, 장시간 히터를
 # 켜고 달리는 실제 겨울 주행보다 손실이 작게 나온다. 충전계획은 거리를 과대평가하면 방전
 # 위험이 있으므로 실측(Geotab/AAA) 기준의 보수적 앵커를 유지한다.
+#   여름(냉방): AAA 실측 35°C(95°F)+에어컨 = -17%, Geotab 30~32°C ≈ -5%.
+#   기존 앵커는 31°C를 손실 0%로 봐서 한국 여름(에어컨 상시)을 과소반영했다 →
+#   Geotab(완만)과 AAA(보수) 사이에서 안전 쪽으로 잡았다.
 _TEMP_ANCHORS: list[tuple[float, float]] = [
     (-20.0, 0.50),
     (-15.0, 0.54),
     (-7.0, 0.61),
     (0.0, 0.80),
     (10.0, 1.00),
-    (31.0, 1.00),
-    (35.0, 0.93),
-    (40.0, 0.85),
+    (24.0, 1.00),  # 냉난방이 거의 필요 없는 구간
+    (31.0, 0.94),  # 에어컨 상시 가동 (Geotab ~5%)
+    (35.0, 0.85),  # AAA -17%와 Geotab 사이, 보수 쪽
+    (40.0, 0.78),
 ]
 # 속도 보정: 공기저항 ∝ 속도²(Geotab). 소비 E(v) ∝ 1 + k·v².
 #   k는 Geotab 실측(50→70km/h 에너지 +13%)로 보정, 정격속도 60km/h 기준.
@@ -352,36 +356,56 @@ _PRECHARGE_FALLBACK_KM = 8.0      # 1차 현장 사용불가 시 인근 대체�
 def origin_precharge_advice(
     current_charge_pct: float,
     effective_range_km: float,
-    first_stop_km: float,
-    first_unavailable: bool = False,
+    target_km: float,
+    target_unavailable: bool = False,
+    is_destination: bool = False,
     spec: VehicleSpec = DOLPHIN_STANDARD,
     traffic_margin: float = _PRECHARGE_TRAFFIC_MARGIN,
     fallback_km: float = _PRECHARGE_FALLBACK_KM,
 ) -> tuple[int, str] | None:
-    """1차 충전소 도달 안전마진이 부족하면 출발지 근처 권장 충전%를 산출.
+    """다음 목표지점 도달 안전마진이 부족하면 출발지 근처 권장 충전%를 산출.
 
-    위험 두 가지(독립적)에 대비한다 — 둘 중 더 큰 도달거리를 요구(합산 아님).
-      1) 정체: 1차 충전소까지 예측보다 더 소모 → first × (1+traffic_margin).
-      2) 현장 사용불가: 도착해도 못 쓰면 인근 대체소까지 → first + fallback_km.
-    필요 도달거리를 안전마진(reserve) 유지한 채 커버할 SoC를 계산하고, 현 충전량이
-    그보다 낮으면 (권장%, 사유)를 돌려준다. 충분하면 None.
+    목표지점은 두 가지다.
+      * 1차 충전소 (is_destination=False): 도착 후 충전하므로 하한은 reserve.
+        위험 두 가지(독립적)에 대비해 더 큰 도달거리를 요구(합산 아님).
+          1) 정체: 예측보다 더 소모 → target × (1+traffic_margin)
+          2) 현장 사용불가: 인근 대체소까지 → target + fallback_km
+      * 목적지 직행 (is_destination=True): 경로상 충전이 필요 없는 짧은 구간이라도
+        도착 시 _DEST_MIN_SOC(15%)는 남아야 한다(목적지 충전소가 점유·고장일 수 있고,
+        도착 후 다시 움직일 여유도 필요). 하한이 이미 큰 여유이므로 정체마진만 얹는다.
+
+    현 충전량이 필요량보다 낮으면 (권장%, 사유)를 돌려준다. 충분하면 None.
     """
-    if effective_range_km <= 0 or first_stop_km <= 0:
+    if effective_range_km <= 0 or target_km <= 0:
         return None
-    # 두 위험은 동시 발생을 가정하지 않으므로 각 필요거리의 max (합산 시 과다권장).
-    d_req = max(first_stop_km * (1.0 + traffic_margin), first_stop_km + fallback_km)
-    req_pct = spec.reserve_pct + d_req / effective_range_km * 100.0
+
+    if is_destination:
+        floor = max(spec.reserve_pct, _DEST_MIN_SOC)
+        d_req = target_km * (1.0 + traffic_margin)
+    else:
+        floor = spec.reserve_pct
+        # 두 위험은 동시 발생을 가정하지 않으므로 각 필요거리의 max (합산 시 과다권장).
+        d_req = max(target_km * (1.0 + traffic_margin), target_km + fallback_km)
+
+    req_pct = floor + d_req / effective_range_km * 100.0
     required = min(100, math.ceil(req_pct))
     if current_charge_pct >= required:
         return None  # 현 충전량으로 안전마진 충분
-    if first_unavailable:
+
+    if is_destination:
+        reason = (
+            f"경로상 충전 없이 목적지({target_km:.0f}km)까지 가지만, 도착 시 최소 "
+            f"{_DEST_MIN_SOC:.0f}% 잔량 확보를 위해 출발지 근처에서 {required}% 이상 "
+            f"충전을 권장합니다."
+        )
+    elif target_unavailable:
         reason = (
             f"1차 충전소가 현재 사용불가입니다. 대체 충전소까지 여유가 필요하니 "
             f"출발지 근처에서 {required}% 이상 충전을 권장합니다."
         )
     else:
         reason = (
-            f"1차 충전소({first_stop_km:.0f}km)까지 정체·현장 사용불가에 대비해 "
+            f"1차 충전소({target_km:.0f}km)까지 정체·현장 사용불가에 대비해 "
             f"출발지 근처에서 {required}% 이상 충전을 권장합니다."
         )
     return required, reason
@@ -562,14 +586,18 @@ def plan_charging_dp(
     )
     n = len(nodes)
 
-    socs = list(range(int(reserve), 101, soc_step))
+    # SoC 격자는 0부터 만든다. reserve부터 시작하면 '현충전량 5%'처럼 안전마진보다
+    # 낮은 출발 상태가 reserve(10%)로 올려붙어 실제보다 낙관적인 계획이 나온다.
+    # 격자를 0까지 두면 출발 SoC를 있는 그대로 표현하고, 출발 제약(dep_route >= reserve)이
+    # 자연히 '이 상태로는 안전하게 출발 불가 → infeasible'을 만들어 선충전 안내로 이어진다.
+    socs = list(range(0, 101, soc_step))
     if socs[-1] != 100:
         socs.append(100)
     b = len(socs)
 
     def snap(soc: float) -> int:
         """SoC → 버킷 인덱스(보수적으로 내림)."""
-        val = max(float(reserve), min(100.0, soc))
+        val = max(0.0, min(100.0, soc))
         best = 0
         for i, s in enumerate(socs):
             if s <= val + 1e-9:

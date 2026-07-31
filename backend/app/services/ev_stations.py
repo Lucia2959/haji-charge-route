@@ -247,12 +247,16 @@ def _group_stations(rows: list[dict]) -> dict[str, StationSummary]:
         ctype = _charge_type(row.get("chgerType", ""))
         power = _output_kw(row.get("output"), ctype)
         if sid not in stations:
+            # 접근성은 카탈로그 로우에 이미 들어있어 추가 API 호출 없이 판정된다.
+            # 입주민/관계자/특정차량 전용은 애초에 충전계획 후보에서 빼기 위한 표시.
+            access = _access_class(row.get("limitYn", "N"), row.get("limitDetail", ""))
             stations[sid] = StationSummary(
                 id=sid,
                 name=row.get("statNm", sid),
                 location=LatLng(lat=float(lat), lng=float(lng)),
                 charger_types=[ctype],
                 max_power_kw=power,
+                public_access=access in ("open", "open_fee"),
             )
         else:
             if ctype not in stations[sid].charger_types:
@@ -299,7 +303,10 @@ async def stations_near_path(path: list[LatLng], radius_km: float = 12.0) -> lis
             catalogs = await asyncio.gather(
                 *(_get_catalog(z, zs) for z, zs in districts)
             )
-            stations = [st for cat in catalogs for st in cat]
+            # 입주민·관계자·특정차량 전용은 충전계획 후보에서 아예 제외한다.
+            # (계획을 세운 뒤 '사용불가'로 표시만 하면, 정작 계획의 중심이 못 쓰는
+            #  충전소가 되어 대체소를 찾느라 경로가 흔들린다.)
+            stations = [st for cat in catalogs for st in cat if st.public_access]
             # 근접 판정용 경로 샘플(거리 기준 ~2km 간격 → 반경 판정 공백 없음)
             sparse = sample_path_points(path, 2.0)
             # 경로에서 먼 충전소는 샘플 전체(수백 개)에 대해 haversine을 다 돌게 되어

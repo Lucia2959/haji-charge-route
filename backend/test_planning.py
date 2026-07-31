@@ -1,10 +1,12 @@
 """주행안정성(절대거리 안전마진) + 충전소 접근성 분류 자체검증.
 실행: python test_planning.py
 """
+import math as _m
+
 from app.models import LatLng, StationSummary
 from app.services.charging import (
     _DEST_MIN_SOC, _MIN_BUFFER_KM, _effective_reserve_pct,
-    cumulative_distances, plan_charging_dp,
+    cumulative_distances, origin_precharge_advice, plan_charging_dp,
 )
 from app.services.ev_stations import _access_class
 
@@ -60,5 +62,20 @@ for cp in cps:
 dest_arr = soc - (total - pos) / kmp
 assert dest_arr >= _DEST_MIN_SOC - 1.0, f"목적지 도착 {dest_arr:.1f}% < {_DEST_MIN_SOC}%"
 
+# 4) 충전 없이 목적지 직행이지만 도착 잔량이 15% 미만이면 선충전 권장이 나와야 한다
+#    (짧은 구간이라 charge_points가 비어도 권장이 누락되면 안 됨 — 실제 누락 버그였음)
+adv_dest = origin_precharge_advice(5.0, 296.0, 8.5, is_destination=True)
+assert adv_dest is not None, "직행인데 도착 2%면 선충전 권장이 나와야 함"
+req_d, reason_d = adv_dest
+want_d = _m.ceil(_DEST_MIN_SOC + 8.5 * 1.15 / 296.0 * 100)
+assert req_d == want_d, f"직행 권장값 {req_d} != 공식 {want_d}"
+assert "15%" in reason_d and "목적지" in reason_d
+# 충전량이 충분하면(예: 50%) 권장하지 않는다
+assert origin_precharge_advice(50.0, 296.0, 8.5, is_destination=True) is None
+# 목적지 기준은 중간 충전소 기준보다 하한이 높다(15% vs reserve 10%)
+mid = origin_precharge_advice(5.0, 296.0, 8.5)
+assert mid and req_d > mid[0], "목적지 직행 하한(15%)이 중간 충전소보다 높아야 함"
+
 print("OK — 절대거리 안전마진(겨울 상향) + 접근성 분류(방문객 우선·차종/집단 차단)")
+print(f"     + 직행 선충전 권장: 5%/8.5km → {req_d}% 권장")
 print(f"     + 목적지 최소잔량: 도착 SoC {dest_arr:.1f}% ≥ {_DEST_MIN_SOC}%")

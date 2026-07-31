@@ -55,7 +55,7 @@ d_req = max(65.0 * 1.15, 65.0 + 8.0)
 want = min(100, _m.ceil(V.reserve_pct + d_req / 160.0 * 100))
 assert req == want, f"권장값 {req} != 공식 {want}"
 #    1차 사용불가 플래그면 사유 문구가 달라야
-adv2 = origin_precharge_advice(40.0, 160.0, 65.0, first_unavailable=True)
+adv2 = origin_precharge_advice(40.0, 160.0, 65.0, target_unavailable=True)
 assert adv2 and "사용불가" in adv2[1], "사용불가 사유 미반영"
 #    오탐 방지(핵심): 먼 1차라도 현 충전량이 정체마진을 커버하면 None (합산이면 오발동)
 #    유효259, 1차176km → need=max(176*1.15, 176+8)=202.4km, 90%usable=(90-10)*259/100=207.2 → 충분

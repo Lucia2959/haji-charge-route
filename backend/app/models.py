@@ -64,14 +64,17 @@ class DestinationCharging(BaseModel):
 
 
 class OriginPrecharge(BaseModel):
-    """출발 전 출발지 근처 권장 충전 (1차 충전소 도달 안전마진 부족 시).
+    """출발 전 출발지 근처 권장 충전.
 
-    1차 충전소까지 정체로 추가 소모되거나, 도착해도 현장 사용불가라 인근 대체
-    충전소까지 더 가야 하는 상황에 대비해 최소 충전량을 권장한다.
+    두 경우에 발생한다.
+      · 1차 충전소까지 정체로 추가 소모되거나 현장 사용불가로 대체소까지 더 가야 할 때
+      · 경로상 충전 없이 목적지로 직행하지만 도착 잔량이 최소치(15%)에 못 미칠 때
+    station 은 출발지 인근에서 외부인이 실제 이용 가능한 충전소(있으면).
     """
 
     required_pct: int  # 출발지 근처에서 이만큼 이상 충전 권장
     reason: str
+    station: Optional["AltStation"] = None  # 출발지 근처 이용가능 충전소
 
 
 class RoutePlanResponse(BaseModel):
@@ -136,6 +139,9 @@ class StationSummary(BaseModel):
     location: LatLng
     charger_types: list[str]  # ["급속", "완속"]
     max_power_kw: float = 100.0  # 충전소 최대 출력(kW) — DP 충전시간 계산용
+    # 외부인(비인가자)이 이용 가능한가. 입주민·관계자·특정차량 전용이면 False.
+    # 카탈로그의 limitYn/limitDetail로 판정하며, 충전계획 후보에서 제외하는 데 쓴다.
+    public_access: bool = True
 
 
 class StationDetail(StationSummary):

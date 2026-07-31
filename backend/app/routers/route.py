@@ -110,18 +110,31 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
     # 배정 충전소 실시간 상태 조회 + 사용불가 시 대체 충전소
     await _enrich_availability(charge_points, stations)
 
-    # 출발지 근처 선충전 권장 — 1차 충전소 도달 안전마진(정체·현장불가) 부족 시
-    origin_precharge = None
+    # 출발지 근처 선충전 권장.
+    #   · 경로상 충전이 있으면  → 1차 충전소 도달 안전마진(정체·현장불가) 기준
+    #   · 충전 없이 직행이면    → 목적지 도착 최소잔량(15%) 기준
+    #     (짧은 구간이라 '충전 0회'로 나와도 도착 잔량이 바닥이면 출발 전 충전이 필요하다)
     if charge_points:
         first = charge_points[0]
         advice = origin_precharge_advice(
             req.current_charge_pct,
             r_eff,
             first.distance_from_origin_km,
-            first_unavailable=first.available is False,
+            target_unavailable=first.available is False,
         )
-        if advice is not None:
-            origin_precharge = OriginPrecharge(required_pct=advice[0], reason=advice[1])
+    else:
+        advice = origin_precharge_advice(
+            req.current_charge_pct, r_eff, distance_km, is_destination=True
+        )
+
+    origin_precharge = None
+    if advice is not None:
+        # 권장만 하지 않고 '어디서 충전할지'까지 안내한다 — 출발지 인근에서 외부인이
+        # 실제로 쓸 수 있는(입주민·관계자·특정차량 전용 제외) 충전소를 찾는다.
+        near_origin = await _find_alternative(origin, stations, set(), radius_km=5.0)
+        origin_precharge = OriginPrecharge(
+            required_pct=advice[0], reason=advice[1], station=near_origin
+        )
 
     return RoutePlanResponse(
         vehicle=DOLPHIN_STANDARD.name,

@@ -50,6 +50,7 @@ export interface DestinationCharging {
 export interface OriginPrecharge {
   required_pct: number; // 출발지 근처에서 이만큼 이상 충전 권장
   reason: string;
+  station: AltStation | null; // 출발지 근처 외부인 이용가능 충전소
 }
 
 export interface RoutePlanResponse {
