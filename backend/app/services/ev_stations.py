@@ -238,12 +238,16 @@ async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
     공유한다. 없으면 같은 데이터를 중복으로 받아 응답도 느려지고 API 쿼터도 두 배로
     쓴다(400km 경로 하나가 시군구 20여 개를 부르므로 체감이 크다).
 
-    공유 Task는 반드시 shield로 감싸 await 한다. 맨 await로 기다리면 **대기자 한 명의
-    취소가 Task 자체로 전파**되어, 같은 시군구를 기다리던 무관한 요청까지 전부
-    CancelledError로 죽는다. 실제로 흔한 경로다 — 프런트가 앱 진입 시 백그라운드로
-    던지는 워밍업이 먼저 Task를 만들어 '주인'이 되는데, 사용자가 화면을 벗어나
-    그 연결이 끊기면 정작 사용자의 계산 요청이 함께 실패한다.
-    shield를 쓰면 취소된 쪽만 CancelledError를 받고 조회·캐시 적재는 계속된다.
+    공유 Task는 shield로 감싸 await 한다. 맨 await로 기다리면 **대기자 한 명의 취소가
+    Task 자체로 전파**되어, 같은 시군구를 기다리던 무관한 요청까지 CancelledError로
+    죽는다(asyncio 수준에서 재현됨 — test_external_stability.py 9번).
+
+    다만 현재 스택에서는 이 취소가 요청 경로로는 들어오지 않는다. 실측(2026-08-01,
+    starlette 1.3.1 / uvicorn 0.51.0 / fastapi 0.139.2): **클라이언트가 연결을 끊어도
+    핸들러는 취소되지 않고 끝까지 실행된다.** 즉 프런트 타임아웃·화면 이탈로는 이
+    버그가 발현되지 않는다. 지금은 방어적 조치이고, 트리거는 서버 종료(재배포) 정도다.
+    starlette가 연결 끊김 시 취소 동작을 바꾼 이력이 있어(버전마다 다름) 업그레이드
+    후 다시 도달 가능해질 수 있으므로 shield는 유지한다 — 비용이 없다.
     """
     key = f"{zcode}:{zscode}"
     cached = _catalog_cache.get(key)
