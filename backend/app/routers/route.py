@@ -18,7 +18,9 @@ plan_route()의 처리 순서 (순서 자체가 성능·정확도에 중요하�
 실측 시간 분해는 docs/04-운영이슈.md [I-S01] 참조.
 """
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..models import (
     AltStation,
@@ -41,7 +43,33 @@ from ..services.charging import (
 )
 from ..models import LatLng, StationSummary
 
-router = APIRouter(prefix="/api/route", tags=["route"])
+# 동시 실행 상한. ratelimit.py는 '분당' 제한이라 20건이 같은 순간에 들어올 수 있고,
+# 그러면 아래 두 가지가 동시에 터진다.
+#   · 메모리 — 요청 1건이 시군구 카탈로그 원본 로우를 최대 수백 MB까지 들고 있다.
+#              Render 무료는 512MB라 서로 다른 경로 2~3건만 겹쳐도 OOM 위험.
+#   · 커넥션 풀 — 공유 풀 20개 중 10개는 이미 _kakao_sem(6)+_fetch_sem(4)에 고정.
+#                 남는 10개를 세마포어 없는 directions/geocode가 나눠 쓴다.
+# 초과분은 거절하지 않고 여기서 '대기'시킨다. 어차피 외부 API 동시성은 _fetch_sem=4로
+# 고정이라 병렬로 밀어 넣어도 총 처리량은 늘지 않는다 — 메모리 피크만 커질 뿐이다.
+_PLAN_CONCURRENCY = 2
+_plan_sem = asyncio.Semaphore(_PLAN_CONCURRENCY)
+
+
+async def _limit_concurrency():
+    """이 라우터의 핸들러 실행을 _PLAN_CONCURRENCY개로 제한(초과분은 대기).
+
+    yield 의존성이라 핸들러가 끝날 때(예외·취소 포함) 세마포어가 반드시 반환된다.
+    plan과 warmup이 같은 세마포어를 쓴다 — 둘의 비용이 사실상 같기 때문이다.
+    """
+    async with _plan_sem:
+        yield
+
+
+router = APIRouter(
+    prefix="/api/route",
+    tags=["route"],
+    dependencies=[Depends(_limit_concurrency)],
+)
 
 
 @router.post("/warmup")

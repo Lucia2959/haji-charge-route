@@ -14,8 +14,13 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 # 경로 prefix → 분당 허용 횟수. 매칭 없으면 _DEFAULT_LIMIT 적용.
+# 매칭은 startswith라 **prefix가 정확히 겹치지 않으면 기본값으로 샌다.**
+# /api/route/warmup 이 그 사례였다 — plan 과 비용이 거의 같은데(지오코딩·경로조회·
+# 카탈로그 수집을 그대로 수행) /api/route/plan 에 안 걸려 120/분을 받고 있었다.
+# 사용자가 누르는 plan 과 달리 앱 진입 시 자동 발사되므로 더 낮게 잡는다.
 _LIMITS: list[tuple[str, int]] = [
     ("/api/route/plan", 20),
+    ("/api/route/warmup", 10),
     ("/api/places/search", 40),
     ("/api/weather/current", 40),
     ("/api/stations", 60),

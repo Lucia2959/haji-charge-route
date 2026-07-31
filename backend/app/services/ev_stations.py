@@ -237,6 +237,13 @@ async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
     같은 시군구를 동시에 요청하면(예: 워밍업과 사용자 계산이 겹칠 때) 하나의 조회를
     공유한다. 없으면 같은 데이터를 중복으로 받아 응답도 느려지고 API 쿼터도 두 배로
     쓴다(400km 경로 하나가 시군구 20여 개를 부르므로 체감이 크다).
+
+    공유 Task는 반드시 shield로 감싸 await 한다. 맨 await로 기다리면 **대기자 한 명의
+    취소가 Task 자체로 전파**되어, 같은 시군구를 기다리던 무관한 요청까지 전부
+    CancelledError로 죽는다. 실제로 흔한 경로다 — 프런트가 앱 진입 시 백그라운드로
+    던지는 워밍업이 먼저 Task를 만들어 '주인'이 되는데, 사용자가 화면을 벗어나
+    그 연결이 끊기면 정작 사용자의 계산 요청이 함께 실패한다.
+    shield를 쓰면 취소된 쪽만 CancelledError를 받고 조회·캐시 적재는 계속된다.
     """
     key = f"{zcode}:{zscode}"
     cached = _catalog_cache.get(key)
@@ -247,11 +254,24 @@ async def _get_catalog(zcode: str, zscode: str) -> list[StationSummary]:
     if inflight is None:
         inflight = asyncio.create_task(_fetch_catalog(key, zcode, zscode))
         _catalog_inflight[key] = inflight
-        try:
-            return await inflight
-        finally:
-            _catalog_inflight.pop(key, None)
-    return await inflight  # 진행 중인 동일 조회에 편승
+        # 정리는 완료 콜백으로 — 대기자가 몇 명이든, 누가 취소되든 정확히 한 번 돈다.
+        # (예전처럼 '주인'의 finally에서 지우면, 주인이 취소됐을 때 아직 살아 있는
+        #  Task의 항목이 사라져 뒤이은 요청이 중복 조회를 시작한다.)
+        inflight.add_done_callback(_make_inflight_release(key))
+    return await asyncio.shield(inflight)  # 진행 중인 동일 조회에 편승
+
+
+def _make_inflight_release(key: str):
+    """in-flight 항목 정리 콜백. 미회수 예외 경고도 함께 막는다."""
+
+    def _release(task: "asyncio.Task[list[StationSummary]]") -> None:
+        _catalog_inflight.pop(key, None)
+        # 대기자가 전부 취소된 뒤 Task가 예외로 끝나면 "Task exception was never
+        # retrieved" 경고가 뜬다. 여기서 한 번 읽어 소비한다(로그 노이즈 제거).
+        if not task.cancelled():
+            task.exception()
+
+    return _release
 
 
 def _evict_expired_status(now: float) -> None:
