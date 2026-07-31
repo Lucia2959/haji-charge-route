@@ -1,0 +1,39 @@
+# Render 배포 정의 (백엔드 FastAPI 전용. 프런트는 Vercel에 배포한다)
+#
+# 중요 — startCommand의 --proxy-headers / --forwarded-allow-ips:
+#   Render는 프록시 뒤에서 앱을 돌리므로, 이 옵션이 없으면 request.client.host가
+#   항상 프록시 IP가 되어 rate limit이 "IP당 20회"가 아니라 "전체 합산 20회"로
+#   동작한다(사용자 한 명이 앱 전체를 묶어버리는 자가 DoS).
+#   Render 내부 프록시 IP는 고정 목록이 없어 '*'로 신뢰하되, X-Forwarded-For 위조를
+#   막는 것은 Render의 엣지가 담당한다.
+#
+# --workers 1: rate limit과 캐시가 인메모리라 워커가 늘면 제한이 워커 수만큼 곱해지고
+#   캐시도 쪼개진다. 반드시 단일 워커로 운영한다.
+services:
+  - type: web
+    name: haji-charge-route-api
+    runtime: python
+    plan: free
+    region: singapore # 한국에서 가장 가까운 무료 리전
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+      --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      # 아래 값들은 Render 대시보드에서 직접 입력한다(파일에 키를 넣지 말 것)
+      - key: KAKAO_REST_API_KEY
+        sync: false
+      - key: EV_STATION_API_KEY
+        sync: false
+      - key: API_TOKEN
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false # 예: https://haji-charge-route.vercel.app
+      - key: APP_ENV
+        value: production
+      - key: MOCK_ENABLED
+        value: "false" # 실주행 앱이므로 추정 경로로 조용히 폴백하지 않는다

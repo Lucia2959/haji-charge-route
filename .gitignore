@@ -1,0 +1,19 @@
+# --- 비밀키: 실제 env 파일은 절대 커밋 금지 ---
+# 템플릿(.env.example, .env.local.example)은 커밋됩니다.
+.env
+.env.local
+.env.*.local
+
+# --- Python (backend) ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Node / Next (frontend) ---
+node_modules/
+.next/
+out/
+
+# --- OS ---
+.DS_Store
+Thumbs.db

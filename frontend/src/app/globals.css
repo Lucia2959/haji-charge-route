@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+:root {
+  --byd-primary: #0a2540;
+  --byd-accent: #00b894; /* 그래픽·선 강조용 (흰 글씨 배경으로는 대비 부족) */
+  /* 흰 글씨를 얹는 배경·작은 텍스트용 진한 변형 (WCAG AA 4.5:1 통과) */
+  --byd-accent-strong: #047857;
+}
+
+/* 전역 포커스 표시 — 키보드 접근성(WCAG 2.4.7). 개별 컴포넌트의 outline:none을 덮는다. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--byd-accent-strong);
+  outline-offset: 2px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #f2f4f7;
+  color: #0a2540;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 모바일 우선: 폰 크기 컨테이너를 화면 중앙에 배치 */
+.phone-shell {
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  /* 홈 화면 추가(standalone) 실행 시 노치·홈 인디케이터에 콘텐츠가 가리지 않게 */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
