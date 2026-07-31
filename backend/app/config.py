@@ -1,3 +1,16 @@
+"""환경변수 설정 (pydantic-settings).
+
+값의 출처는 두 가지다.
+  · 로컬 : `backend/.env` (gitignore 대상. 템플릿은 `.env.example`)
+  · 배포 : Render 대시보드의 환경변수 (`render.yaml`에서 `sync: false`로 선언)
+
+모듈 로드 시점에 단일 인스턴스 `settings`를 만들어 앱 전역이 공유한다. 즉
+**환경변수 변경은 프로세스 재시작이 있어야 반영된다**(Render는 값 저장 시 자동 재시작).
+
+키가 비어 있어도 앱은 뜬다 — `use_kakao` / `use_ev_api`가 False가 되어 mock으로
+동작한다. 단 운영에서는 `mock_enabled=False`라 mock 폴백 대신 오류를 낸다.
+"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

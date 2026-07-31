@@ -1,5 +1,9 @@
 "use client";
 
+// 장소 검색 모달 (M-01) — 출발지·도착지·즐겨찾기 등록에 공용으로 쓴다.
+//
+// 호출부(main/page.tsx)는 선택된 좌표를 `"lng,lat"` 문자열로 만들어 보관한다.
+// 경로계산 때 지오코딩을 다시 타지 않아 API 호출 1회를 아끼고 정확도도 높다.
 import { useEffect, useRef, useState } from "react";
 import { searchPlaces } from "@/lib/api";
 import type { PlaceResult } from "@/lib/types";

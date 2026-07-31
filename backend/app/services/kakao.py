@@ -225,6 +225,10 @@ async def get_directions(origin: LatLng, dest: LatLng) -> dict:
             congestion: list[dict] = []
             cur: dict | None = None  # 현재 스트레치 누적
 
+            # 진행 중인 정체/지체 스트레치를 확정해 congestion에 담는다.
+            # 같은 level이 연속되는 동안 누적하다가, level이 바뀌거나 원활 구간을
+            # 만나면 flush → 지도에 잘게 쪼개진 선분 대신 연속 구간 하나로 그려진다.
+            # 평균속도는 거리가중(Σ속도×거리 ÷ Σ거리), 고속도로 여부는 거리 과반 기준.
             def _flush() -> None:
                 nonlocal cur
                 if cur and cur["dist_m"] > 0:
@@ -237,6 +241,12 @@ async def get_directions(origin: LatLng, dest: LatLng) -> dict:
                     })
                 cur = None
 
+            # 카카오 응답 구조: routes[].sections[].roads[]
+            #   road.vertexes = [lng, lat, lng, lat, ...] 평탄화 배열 (경도가 먼저)
+            #   road.distance = m, road.duration = 초, road.traffic_speed = km/h
+            #   road.traffic_state = 0~4 (4=정체, 3=지체, 그 외/없음=원활·정보없음)
+            # 도로 단위로 순회하며 ①폴리라인 ②소비예측용 세그먼트 ③정체 스트레치를
+            # 한 번에 만든다(같은 배열을 세 번 도는 것을 피함).
             for section in route.get("sections", []):
                 for road in section.get("roads", []):
                     verts = road["vertexes"]

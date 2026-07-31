@@ -1,5 +1,11 @@
 "use client";
 
+// 충전 계산 화면 (S-05) — 충전소 상세에서 고른 충전기 기준 금액·시간 계산.
+//
+// ⚠ 이 화면의 계산은 백엔드 DP와 **다르다.** 여기는 사용자가 임의로 고른 충전기에
+// 대한 단순 정출력 계산(kWh ÷ kW × 60)이고, 백엔드 plan_charging_dp()는 SoC별
+// 충전커브(taper)를 반영한다. 고SoC 구간에서 실제 시간은 이 화면 값보다 길어진다.
+// 그래서 화면 하단에 "단순 정출력 기준" 고지를 붙였다 — 삭제하지 말 것.
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { loadCharger, type SelectedCharger } from "@/lib/api";

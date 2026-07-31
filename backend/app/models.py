@@ -1,3 +1,15 @@
+"""API 요청·응답 스키마 (Pydantic).
+
+이 파일이 프런트(`frontend/src/lib/types.ts`)와의 계약이다. 필드를 추가·변경하면
+반드시 프런트 타입도 함께 고쳐야 한다(자동 생성이 아니라 수동 동기화).
+
+명명 규칙: 백엔드는 snake_case를 그대로 내보내고 프런트도 그대로 받는다
+(alias 변환을 두지 않아 필드를 눈으로 대조할 수 있게 했다).
+
+Optional 필드의 의미: `None`은 "값이 없음"이 아니라 대부분 **"공공 API가 제공하지
+않음"**이다. 화면은 이런 필드를 렌더에서 제외한다(빈 값을 표시하지 않는다).
+"""
+
 from typing import Optional
 from pydantic import BaseModel, Field
 

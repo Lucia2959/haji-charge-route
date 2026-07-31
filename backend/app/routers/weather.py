@@ -1,3 +1,10 @@
+"""기온 조회 라우터 — 메인 화면의 기온 자동입력.
+
+**부가기능이므로 절대 실패를 전파하지 않는다.** 위치를 못 찾든 Open-Meteo가 죽든
+`temperature_c=None`을 돌려주고, 프런트는 사용자가 입력한 기온을 그대로 유지한다.
+기온 하나 때문에 경로계획 화면 전체가 막히면 안 되기 때문이다.
+"""
+
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 

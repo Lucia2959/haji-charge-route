@@ -1,3 +1,15 @@
+// 백엔드 호출 + 브라우저 저장소 접근을 모두 담는 단일 진입점.
+//
+// 이 파일이 지키는 세 가지
+//   1) 모든 fetch는 `req()`를 거친다 — 타임아웃·공유 토큰 헤더·한국어 오류 변환
+//   2) 사용자에게 보이는 호출은 `withLoading()`으로 감싼다 (워밍업만 예외)
+//   3) 저장소 접근은 전부 try-catch — Safari 프라이빗 모드에서 sessionStorage가
+//      SecurityError를 던져 화면 전체가 죽는 것을 막는다
+//
+// 서버에 세션이 없으므로 브라우저 저장소가 화면 간 데이터 채널 역할을 한다.
+//   sessionStorage(3h TTL): haji.routePlan / haji.mainForm / haji.selectedCharger
+//   localStorage(무기한)   : haji.shortcuts  ← 개인 주소. 번들·서버에 두지 않는다
+
 import { withLoading } from "./loading";
 import type {
   PlaceResult,

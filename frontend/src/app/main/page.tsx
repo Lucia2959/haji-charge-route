@@ -1,5 +1,20 @@
 "use client";
 
+// 메인 화면 (S-02) — 앱의 핵심 화면. 입력 → 계산 → 결과 표시를 한 화면에서 처리한다.
+//
+// 화면 구성(위→아래)
+//   헤더(새로고침) · 즐겨찾기 · 입력부 · 계산버튼 · 조건부 배너 · 산출영역(접이식)
+//
+// 상태 보관 위치
+//   sessionStorage(3h) : 검색조건(haji.mainForm), 계획결과(haji.routePlan)
+//   localStorage       : 즐겨찾기(haji.shortcuts) ← 개인 주소. 서버·번들에 두지 않는다
+//   메모리             : 모달·패널 펼침 여부 등 화면 상태
+//
+// 마운트 순서가 중요하다: loadForm → loadPlan → loadShortcuts → hydrated=true.
+// hydrated 이전에 저장/날씨조회가 돌면 복원값을 기본값으로 덮어쓴다.
+//
+// 이 파일이 860줄로 커진 것은 알려진 구조 부채다(시스템아키텍처 6장). 결과 표시
+// 섹션을 컴포넌트로 분리할 여지가 있으나 동작에는 문제가 없어 그대로 두었다.
 import { useMutation } from "@tanstack/react-query";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -652,8 +667,7 @@ export default function MainPage() {
   );
 }
 
-// 지도보기 버튼용 우리나라(남한) 전도 아이콘 — 반도 실루엣 + 제주도
-// 결과 하단 액션 버튼 (지도보기·상세보기·산출근거). active면 눌린 상태(네이비).
+// 결과 하단 액션 버튼 (지도보기·상세보기·산출근거). expanded면 눌린 상태(네이비).
 // expanded/controls를 주면 아래 패널을 여닫는 disclosure 버튼으로 동작(스크린리더에
 // '무엇이 펼쳐졌는지' 전달). 지도보기처럼 화면 이동만 하는 버튼은 둘 다 생략한다.
 function ActionBtn({

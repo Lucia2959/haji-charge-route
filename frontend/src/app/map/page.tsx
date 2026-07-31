@@ -1,5 +1,8 @@
 "use client";
 
+// 지도보기 화면 (S-03).
+// 자체 데이터 조회가 없다 — 메인 화면이 sessionStorage에 넣어둔 계획 결과를 읽어
+// 그릴 뿐이다. 그래서 계획 없이 URL로 직접 들어오면 안내 화면을 띄운다.
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import KakaoMap from "@/components/KakaoMap";
@@ -9,6 +12,9 @@ import type { RoutePlanResponse } from "@/lib/types";
 export default function MapPage() {
   const router = useRouter();
   const [plan, setPlan] = useState<RoutePlanResponse | null>(null);
+  // ready: 저장소 읽기가 끝났는지. 이게 없으면 첫 렌더(plan=null)에서
+  // "경로 정보가 없습니다"가 잠깐 깜빡인다. sessionStorage는 클라이언트에만
+  // 있으므로 반드시 useEffect 안에서 읽어야 한다(SSR 시 window 없음).
   const [ready, setReady] = useState(false);
 
   useEffect(() => {

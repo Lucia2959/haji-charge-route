@@ -1,8 +1,14 @@
 "use client";
 
+// 카카오 지도 렌더 — 경로 폴리라인 + 정체/지체 오버레이 + 충전소 마커.
+//
+// 키가 없으면 로더를 아예 호출하지 않고 목록 UI로 폴백한다("키 없이도 구동"이
+// 이 앱의 설계 원칙). 지도가 안 뜨는 원인 1순위는 키 부재가 아니라 **JavaScript 키에
+// 배포 도메인이 등록되지 않은 것**이다 — DEPLOY.md 4장 참조.
 import { Map, MapMarker, Polyline, useKakaoLoader } from "react-kakao-maps-sdk";
 import type { RoutePlanResponse } from "@/lib/types";
 
+// 빌드 시점에 번들로 굳는다. 값을 바꾸면 반드시 재배포해야 반영된다.
 const KAKAO_KEY = process.env.NEXT_PUBLIC_KAKAO_JS_KEY ?? "";
 
 export default function KakaoMap({

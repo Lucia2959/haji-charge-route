@@ -1,5 +1,9 @@
 "use client";
 
+// 로그인 화면 (S-01) — **실제 인증은 없다.** 진입 연출과 고지 역할이다.
+//
+// BYD 로고를 쓰는 이상 공식 앱으로 오인될 여지가 있어, "비공식 개인 테스트 앱"
+// 고지를 화면에 둔다. 이 문구는 삭제하지 말 것(품질처리내역 A-11).
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 

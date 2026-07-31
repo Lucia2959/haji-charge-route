@@ -1,5 +1,10 @@
 "use client";
 
+// 충전소 상세 화면 (S-04) — 실시간 충전기 상태.
+//
+// 표시 원칙: 공공 API가 주지 않는 값(잔여시간·회원요금 등)은 빈 값으로 두지 않고
+// **섹션 자체를 렌더에서 제외**한다. 빈 칸이 있으면 "데이터가 있는데 못 읽었다"로
+// 오해되기 때문. `data_source` 표기로 실데이터/mock을 항상 구분해 보여준다.
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import CarLoader from "@/components/CarLoader";
@@ -13,7 +18,10 @@ export default function StationPage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["station", id],
     queryFn: () => getStation(id),
-    refetchInterval: 10_000, // 실시간 충전현황 10초마다 갱신
+    // 실시간 충전현황 10초마다 갱신. 백엔드 상태캐시가 20초라 실제 외부 API 호출은
+    // 20초에 1회다 → 폴링 자체는 저렴하지만, 화면을 열어둔 채 방치하면 20초당
+    // 1회씩 계속 쿼터를 쓴다(운영이슈 I-S04).
+    refetchInterval: 10_000,
   });
 
   return (
