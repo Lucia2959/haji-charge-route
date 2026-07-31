@@ -25,7 +25,7 @@ from collections.abc import Iterable
 import httpx
 
 from ..config import settings
-from ..http import QuotaExceeded, client as _http
+from ..http import QuotaExceeded, RateLimited, client as _http
 from ..models import (
     LatLng,
     RealtimeCharger,
@@ -156,10 +156,11 @@ async def _get_with_retry(params: dict) -> httpx.Response:
             if attempt < _MAX_RETRY - 1:
                 await asyncio.sleep(0.6 * (attempt + 1))
                 continue
-            raise QuotaExceeded("ev")  # 지속 429 → 무료 사용량 초과/과금
+            # 429는 "단시간 과다호출"이지 쿼터 소진이 아니다(소진은 본문 코드 22).
+            raise RateLimited("ev")
         r.raise_for_status()
         return r
-    raise QuotaExceeded("ev")  # 방어적(도달 불가)
+    raise RateLimited("ev")  # 방어적(도달 불가)
 
 
 async def _fetch_rows(zcode: str, zscode: str | None = None) -> list[dict]:

@@ -10,7 +10,7 @@ import asyncio
 import httpx
 
 from ..config import settings
-from ..http import QuotaExceeded, client as _http
+from ..http import RateLimited, client as _http
 from ..models import LatLng, PlaceResult
 
 # 외부기관(Kakao) 연계 안정성: 순간 429·5xx·네트워크 오류에 즉시 실패하면 전체
@@ -22,8 +22,9 @@ _MAX_RETRY = 3
 async def _get_retry(url: str, **kwargs) -> httpx.Response:
     """Kakao GET — 공유 클라이언트 사용, 429·5xx·타임아웃/전송오류 시 지수백오프 재시도.
 
-    재시도해도 지속 429면 무료제한/과금으로 보고 QuotaExceeded(사용량 초과)를 던져,
-    일시적 network 오류와 구분한다.
+    재시도해도 지속 429면 RateLimited(단시간 과다호출)로 구분해 던진다. 카카오는
+    쿼터 소진과 순간 스로틀을 모두 429로 주므로, 사용자에겐 '잠시 후 재시도'가
+    양쪽 모두에 맞는 안내다.
     """
     for attempt in range(_MAX_RETRY):
         try:
@@ -37,7 +38,7 @@ async def _get_retry(url: str, **kwargs) -> httpx.Response:
             if attempt < _MAX_RETRY - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))  # 일시 제한 → 재시도
                 continue
-            raise QuotaExceeded("kakao")  # 지속 429 → 무료 사용량 초과/과금
+            raise RateLimited("kakao")  # 지속 429 → 단시간 과다호출
         if r.status_code >= 500 and attempt < _MAX_RETRY - 1:
             await asyncio.sleep(0.5 * (attempt + 1))  # 서버오류 → 재시도
             continue

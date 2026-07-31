@@ -11,7 +11,7 @@ import asyncio
 import httpx
 
 import app.http as http
-from app.http import QuotaExceeded
+from app.http import QuotaExceeded, RateLimited
 from app.services import ev_stations
 from app.services.kakao import _MAX_RETRY as K_RETRY, _get_retry
 
@@ -33,15 +33,16 @@ def h1(req):
     return httpx.Response(200 if n1["c"] >= 3 else 429)
 assert run(lambda: _get_retry("https://x/"), h1).status_code == 200 and n1["c"] == 3
 
-# 2) Kakao 지속 429 → 사용량 초과(QuotaExceeded), _MAX_RETRY회 시도
+# 2) Kakao 지속 429 → RateLimited(단시간 과다호출), _MAX_RETRY회 시도
+#    429는 쿼터 '소진'이 아니므로 QuotaExceeded로 승격하면 안 된다(오안내).
 n2 = {"c": 0}
 def h2(req):
     n2["c"] += 1
     return httpx.Response(429)
 try:
     run(lambda: _get_retry("https://x/"), h2)
-    raise AssertionError("지속 429는 QuotaExceeded 여야 함")
-except QuotaExceeded:
+    raise AssertionError("지속 429는 RateLimited 여야 함")
+except RateLimited:
     assert n2["c"] == K_RETRY
 
 # 3) Kakao 5xx → 재시도 후 200
@@ -84,13 +85,13 @@ try:
 except QuotaExceeded:
     pass
 
-# 7) EV 지속 429 → QuotaExceeded
+# 7) EV 지속 429 → RateLimited (본문 코드22만 QuotaExceeded)
 def h7(req):
     return httpx.Response(429)
 try:
     run(lambda: ev_stations._get_with_retry({"a": 1}), h7)
-    raise AssertionError("EV 지속 429는 QuotaExceeded 여야 함")
-except QuotaExceeded:
+    raise AssertionError("EV 지속 429는 RateLimited 여야 함")
+except RateLimited:
     pass
 
-print("OK — 외부 연계 안정성: 재시도/백오프, 사용량초과(429지속·코드22) 구분, 4xx 즉시반환, 전송오류 raise")
+print("OK — 외부 연계 안정성: 재시도/백오프, 쿼터소진(코드22)과 일시제한(429) 구분, 4xx 즉시반환, 전송오류 raise")

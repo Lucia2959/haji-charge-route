@@ -17,7 +17,23 @@ import httpx
 
 
 class QuotaExceeded(Exception):
-    """외부 API 무료 사용량 초과 / 과금 발생 (network·내부 호출제한과 구분)."""
+    """외부 API 무료 사용량 '소진' — 그날 안에는 회복되지 않는다.
+
+    공공데이터포털이 본문에 명시적으로 알려주는 경우(returnReasonCode 22 =
+    LIMITED_NUMBER_OF_SERVICE_REQUESTS)에만 쓴다. 429는 아래 RateLimited다.
+    """
+
+    def __init__(self, provider: str = "") -> None:
+        super().__init__(provider)
+        self.provider = provider
+
+
+class RateLimited(Exception):
+    """외부 API 단시간 과다호출 제한(HTTP 429) — 잠시 후 재시도하면 풀린다.
+
+    쿼터 소진과 반드시 구분해야 한다. 429를 '사용량 초과'로 표시하면 사용자가
+    '오늘은 못 쓴다'고 오해하지만, 실제로는 몇 분 뒤 정상 동작한다.
+    """
 
     def __init__(self, provider: str = "") -> None:
         super().__init__(provider)

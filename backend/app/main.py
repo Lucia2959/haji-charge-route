@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from . import http
 from .config import settings
-from .http import QuotaExceeded
+from .http import QuotaExceeded, RateLimited
 from .ratelimit import rate_limit_middleware
 from .routers import places, route, stations, weather
 
@@ -36,6 +36,20 @@ async def _quota_exceeded_handler(request: Request, exc: QuotaExceeded) -> JSONR
     return JSONResponse(
         status_code=402,
         content={"detail": "사용량이 초과하였습니다", "code": "quota_exceeded"},
+    )
+
+
+# 단시간 과다호출(HTTP 429)은 쿼터 '소진'과 다르다 — 잠시 뒤면 풀린다.
+# 이걸 '사용량 초과'로 표시하면 사용자가 오늘은 못 쓴다고 오해한다.
+@app.exception_handler(RateLimited)
+async def _rate_limited_handler(request: Request, exc: RateLimited) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "외부 지도·충전소 서비스 요청이 몰리고 있습니다. 잠시 후 다시 시도해 주세요.",
+            "code": "upstream_rate_limited",
+        },
+        headers={"Retry-After": "60"},
     )
 
 # 요청 제한(IP·경로별) — 개인/내부용 인메모리 제한

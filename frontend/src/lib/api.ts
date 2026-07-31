@@ -30,8 +30,10 @@ async function errText(res: Response, fallback: string): Promise<string> {
   } catch {
     // JSON 본문이 아니면 폴백
   }
+  // 402 = 외부 API 일일 사용량 '소진'(오늘은 회복 안 됨)
+  // 429 = 단시간 과다호출(잠시 후 풀림) — 둘을 섞으면 사용자가 오해한다
   if (res.status === 402) return "사용량이 초과하였습니다";
-  if (res.status === 429) return "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.";
+  if (res.status === 429) return "요청이 몰리고 있습니다. 잠시 후 다시 시도해 주세요.";
   if (res.status >= 500) return `${fallback} — 서버 오류입니다. 잠시 후 다시 시도해 주세요.`;
   return `${fallback} (${res.status})`;
 }
