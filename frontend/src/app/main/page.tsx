@@ -43,26 +43,17 @@ type Place = { label: string; value: string };
 // NEXT_PUBLIC_ 로 두면 빌드 산출물에 주소가 그대로 박혀 배포 시 노출되기 때문.
 const SHORTCUT_ICONS = ["🏠", "📍"];
 
-// 출발지 기본값(고정). 화면에서 바꿀 수는 있고, '초기화'를 누르면 이 값으로 돌아온다.
-//
-// ⚠ 위 즐겨찾기 주석과 상반되는 예외다. 이 문자열은 클라이언트 번들에 그대로 박혀
-//    배포 URL을 아는 사람은 누구나 읽을 수 있다(NEXT_PUBLIC_ 환경변수로 옮겨도
-//    빌드 시 번들에 들어가므로 똑같다). 노출을 원치 않으면 여기서 지우고
-//    '＋ 즐겨찾기'로 등록할 것 — 즐겨찾기는 기기 localStorage에만 남는다.
-const DEFAULT_ORIGIN = "목동서로 100";
+// 출발지 기본값(고정). 화면에서 바꿀 수 있고, '초기화'를 누르면 이 값으로 돌아온다.
+// ⚠ 바로 위 정책의 예외 — 이 주소는 번들에 박혀 배포본에서 그대로 읽힌다.
+//    노출을 원치 않으면 EMPTY_PLACE로 바꾸고 '＋ 즐겨찾기'로 등록할 것.
+const DEFAULT_ORIGIN: Place = { label: "목동서로 100", value: "목동서로 100" };
+const EMPTY_PLACE: Place = { label: "", value: "" };
 
 export default function MainPage() {
   const router = useRouter();
-  const [origin, setOrigin] = useState<Place>({
-    label: DEFAULT_ORIGIN,
-    value: DEFAULT_ORIGIN,
-  });
-  // 도착지는 빈칸으로 시작한다 — 비어 있으면 계산 버튼이 비활성이라
-  // 사용자가 목적지를 고르기 전에 실수로 계산이 나가지 않는다.
-  const [destination, setDestination] = useState<Place>({
-    label: "",
-    value: "",
-  });
+  const [origin, setOrigin] = useState<Place>(DEFAULT_ORIGIN);
+  // 도착지는 빈칸으로 시작 — 비어 있으면 계산 버튼이 비활성이다
+  const [destination, setDestination] = useState<Place>(EMPTY_PLACE);
   const [charge, setCharge] = useState("50");
   const [temp, setTemp] = useState("20");
   const [tempAuto, setTempAuto] = useState(false); // 기상청 자동입력 여부
@@ -120,11 +111,10 @@ export default function MainPage() {
     else setDestination(place);
   }
 
-  // 초기화: 도착지·계획을 비우고 출발지는 기본값으로 되돌린다 (세션 저장분도 제거).
-  // 출발지를 빈칸으로 두면 '고정 출발지'라는 의도와 어긋나므로 DEFAULT_ORIGIN을 복원한다.
+  // 초기화: 도착지·계획을 비우고 출발지는 기본값으로 되돌린다 (세션 저장분도 제거)
   function resetPlaces() {
-    setOrigin({ label: DEFAULT_ORIGIN, value: DEFAULT_ORIGIN });
-    setDestination({ label: "", value: "" });
+    setOrigin(DEFAULT_ORIGIN);
+    setDestination(EMPTY_PLACE);
     setActive("origin");
     setPlan(null);
     setResultOpen(false);
