@@ -236,6 +236,17 @@ cd backend && python check_db.py
 
 연결이 되면 크론을 건다.
 
+> **Windows PowerShell에서는 `curl.exe`로 쓸 것.** PowerShell의 `curl`은
+> `Invoke-WebRequest` 별칭이라 `-H`가 해시테이블을 요구해 아래 명령이 그대로는 실패한다
+> (`'Headers' 매개 변수를 바인딩할 수 없습니다`). `.exe`만 붙이면 진짜 curl이 돈다.
+>
+> ```powershell
+> $t = Read-Host "COLLECT_TOKEN"   # 히스토리에 토큰을 남기지 않는다
+> curl.exe -s -X POST -H "X-Collect-Key: $t" https://<백엔드>.onrender.com/internal/collect
+> ```
+>
+> `Invoke-RestMethod`도 되지만 401·429에서 예외를 던지고 본문을 감춰 점검에는 불리하다.
+
 ```bash
 curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
   https://<백엔드>.onrender.com/internal/collect
