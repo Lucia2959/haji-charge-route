@@ -431,7 +431,8 @@ export default function MainPage() {
                 충전 계획 결과
               </span>
               <span className="block text-[11px] text-slate-500">
-                {plan.total_distance_km}km · {plan.total_trip_min}분 · 충전{" "}
+                {plan.total_distance_km}km · {hourMin(plan.total_trip_min).join("")}{" "}
+                · 충전{" "}
                 {plan.charge_stops_count}회
               </span>
             </span>
@@ -455,7 +456,11 @@ export default function MainPage() {
               <div className="px-4 pb-4">
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <Stat label="총 거리" value={`${plan.total_distance_km}`} unit="km" />
-            <Stat label="총 소요" value={`${plan.total_trip_min}`} unit="분" />
+            <Stat
+              label="총 소요"
+              value={hourMin(plan.total_trip_min)[0]}
+              unit={hourMin(plan.total_trip_min)[1]}
+            />
             <Stat
               label="충전예상지점수"
               value={`${plan.charge_stops_count}`}
@@ -1042,6 +1047,19 @@ function Field({
       {children}
     </label>
   );
+}
+
+// 분 → [큰 숫자, 작은 단위]. Stat의 (value, unit) 표기(숫자 크게·단위 작게)에 맞춰
+// 튜플로 돌려준다. 문자열이 필요하면 두 값을 이어 붙이면 된다("4" + "시간 1분").
+//
+//   45  → ["45", "분"]        1시간 미만은 분만 쓴다
+//   240 → ["4",  "시간"]      정각이면 "0분"을 붙이지 않는다
+//   241 → ["4",  "시간 1분"]
+function hourMin(min: number): [string, string] {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return [String(m), "분"];
+  const rest = m % 60;
+  return [String(Math.floor(m / 60)), rest ? `시간 ${rest}분` : "시간"];
 }
 
 function Stat({
