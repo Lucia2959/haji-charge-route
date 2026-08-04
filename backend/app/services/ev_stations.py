@@ -163,10 +163,10 @@ def _is_quota_body(text: str) -> bool:
     return any(m.lower() in low for m in _QUOTA_MARKERS)
 
 
-async def _get_with_retry(params: dict) -> httpx.Response:
+async def _get_with_retry(params: dict, op: str = "getChargerInfo") -> httpx.Response:
     """공유 클라이언트로 조회. 429는 백오프 재시도하되, 쿼터 소진이면 즉시 중단."""
     for attempt in range(_MAX_RETRY):
-        r = await _http().get(f"{EV_API_BASE}/getChargerInfo", params=params, timeout=20)
+        r = await _http().get(f"{EV_API_BASE}/{op}", params=params, timeout=20)
         if r.status_code == 429:
             # 쿼터 소진은 재시도해도 소용없다 → 백오프 낭비 없이 즉시 알린다.
             if _is_quota_body(r.text):
@@ -178,6 +178,33 @@ async def _get_with_retry(params: dict) -> httpx.Response:
         r.raise_for_status()
         return r
     raise RateLimited("ev")  # 방어적(도달 불가)
+
+
+# 로우에서 실제로 쓰는 필드만 남긴다. getChargerInfo는 note·location·kindDetail·
+# busiCall 등 화면에 안 쓰는 긴 텍스트를 함께 주는데, 그대로 들고 있으면
+# _status_cache가 시군구 하나당 수십 MB가 된다(용인 15,096행 × ~2.5KB ≈ 37MB).
+# 수집기가 회랑 19개 시군구 카탈로그를 한 번에 갱신하면 그것만으로 512MB를 넘긴다.
+# 아래 목록은 _group_stations · _fetch_catalog · _build_detail이 참조하는 키의 합집합이다.
+# 필드를 새로 쓰려면 여기에 먼저 추가해야 한다 — 없으면 조용히 빈 값이 된다.
+_KEEP_FIELDS = frozenset({
+    "statId", "statNm", "chgerId", "chgerType", "stat", "output",
+    "lat", "lng", "limitYn", "limitDetail", "parkingFree",
+    "busiNm", "bnm", "addr", "addrDetail", "useTime", "year", "zscode",
+})
+
+
+def _project_row(item: ET.Element) -> dict:
+    """XML item → 필요한 필드만 담은 dict."""
+    return {
+        c.tag: (c.text or "").strip() for c in item if c.tag in _KEEP_FIELDS
+    }
+
+
+# 상태캐시에 동시에 살려둘 시군구 수. TTL(20초)만으로는 '읽을 때 만료 판정'이라
+# 아무도 안 읽으면 엔트리가 계속 남는다 → 개수 상한을 함께 둔다.
+# 계획 1건이 시군구 20여 곳을 지나지만 상태는 배정·목적지·대체 충전소 부근만
+# 실제로 읽으므로, 8개면 캐시 히트율을 거의 잃지 않는다.
+_MAX_STATUS_ENTRIES = 8
 
 
 async def _fetch_rows(zcode: str, zscode: str | None = None) -> list[dict]:
@@ -200,6 +227,49 @@ async def _fetch_rows(zcode: str, zscode: str | None = None) -> list[dict]:
         r = await _get_with_retry(params)
         if _is_quota_body(r.text):
             raise QuotaExceeded("ev")  # HTTP 200 본문에 담겨오는 쿼터 소진
+        root = ET.fromstring(r.text)
+        page_items = root.findall(".//item")
+        for it in page_items:
+            rows.append(_project_row(it))
+        total_el = root.find(".//totalCount")
+        total = int(total_el.text) if total_el is not None and total_el.text else 0
+        if page * _ROWS >= total or not page_items:
+            break
+        page += 1
+        await asyncio.sleep(_THROTTLE_SEC)
+    return rows
+
+
+async def fetch_status_feed() -> list[dict]:
+    """전국 충전기 상태변경 피드(getChargerStatus)를 통째로 받아온다.
+
+    getChargerInfo와 다른 오퍼레이션이며, 성격도 다르다.
+
+      · **최근 10분 안에 상태가 바뀐 충전기만** 반환한다(실측 전국 약 13,600건 = 2페이지).
+        `period` 파라미터는 **무시된다** — 10/60/1440을 넣어도 totalCount가 같다.
+        즉 윈도는 10분 고정이고, **폴링 주기가 10분을 넘으면 그 사이 변경을 영구히 놓친다.**
+      · lastTsdt/lastTedt = 직전 완료 세션의 시작/종료 시각(실측 97% 채워짐),
+        nowTsdt = 진행 중 세션의 시작 시각(stat=3일 때만). 즉 점유 스냅샷이 아니라
+        **세션 이벤트 로그**다 → 평균 점유시간을 상수로 가정할 필요가 없어진다.
+      · 위치·충전기타입·개방여부가 없다. statId로 카탈로그와 조인해야 한다.
+
+    시도(zcode) 필터도 되지만 쓰지 않는다. 전국 무필터가 2페이지인 반면
+    서울+경기+강원 3개 시도를 따로 부르면 3페이지라 **오히려 호출이 늘고**
+    커버리지는 좁아진다(실측: 전국 13,629 / 서울 1,820 · 경기 2,880 · 강원 949).
+    """
+    rows: list[dict] = []
+    page = 1
+    while True:
+        params = {
+            "serviceKey": settings.ev_station_api_key,
+            "pageNo": page,
+            "numOfRows": _ROWS,
+            "period": 10,
+        }
+        async with _fetch_sem:  # 계획 요청과 동시 호출 상한을 공유한다(합쳐서 4)
+            r = await _get_with_retry(params, op="getChargerStatus")
+        if _is_quota_body(r.text):
+            raise QuotaExceeded("ev")
         root = ET.fromstring(r.text)
         page_items = root.findall(".//item")
         for it in page_items:
@@ -228,6 +298,7 @@ async def _fetch_catalog(key: str, zcode: str, zscode: str) -> list[StationSumma
     # 다시 fetch하는 중복 호출을 없앤다(로우는 방금 받아 신선). 상태캐시는 20초라
     # 이후엔 정상적으로 실시간 재조회된다.
     _status_cache[key] = (now, rows)
+    _evict_expired_status(now)  # 카탈로그 대량 갱신 시 상태캐시가 무한정 쌓이지 않게
     return stations
 
 
@@ -279,14 +350,25 @@ def _make_inflight_release(key: str):
 
 
 def _evict_expired_status(now: float) -> None:
-    """만료된 상태캐시 제거.
+    """만료된 상태캐시 제거 + 개수 상한 적용.
 
-    _status_cache는 시군구 원본 로우(건당 ~2.5KB)를 통째로 들고 있어, 장거리 경로
-    1회 계산만으로 수십~수백 MB가 상주한다. TTL은 '읽을 때 만료 판정'만 하므로
-    엔트리 자체를 지워주지 않으면 프로세스가 살아있는 동안 계속 쌓인다.
+    _status_cache는 시군구 로우를 들고 있어 장거리 경로 1회 계산만으로 수십 MB가
+    상주한다. TTL은 '읽을 때 만료 판정'만 하므로 엔트리 자체를 지워주지 않으면
+    프로세스가 살아있는 동안 계속 쌓인다.
+
+    TTL 청소만으로는 부족하다 — 아무도 읽지 않는 엔트리는 만료돼도 남는다.
+    _fetch_catalog가 카탈로그를 받을 때마다 상태캐시도 같이 채우므로,
+    수집기가 회랑 19개 시군구를 갱신하면 그 19개가 통째로 상주한다.
+    그래서 오래된 것부터 개수 상한까지 줄인다.
     """
     for k, (ts, _) in list(_status_cache.items()):
         if now - ts >= _STATUS_TTL:
+            del _status_cache[k]
+    if len(_status_cache) > _MAX_STATUS_ENTRIES:
+        # 오래된 순으로 초과분 제거(적재 시각 기준)
+        for k, _ in sorted(_status_cache.items(), key=lambda kv: kv[1][0])[
+            : len(_status_cache) - _MAX_STATUS_ENTRIES
+        ]:
             del _status_cache[k]
 
 
@@ -333,6 +415,32 @@ def _group_stations(rows: list[dict]) -> dict[str, StationSummary]:
     return stations
 
 
+def normalize_zscode(zscode: str) -> str:
+    """법정동코드 앞 5자리 → 공공 EV API가 실제로 받는 zscode.
+
+    **일반구(자치구가 아닌 구)는 공공 API에 존재하지 않는다.** 카카오
+    coord2regioncode는 성남시 분당구를 41135로 주는데, 이 코드로 조회하면
+    totalCount=0이 나온다(실측 2026-08-04). 시 단위 41130으로 물어야 나온다.
+
+        41135(분당) → 0건        41130(성남시) → 10,799건
+        41465(수지) → 0건        41460(용인시) → 15,096건
+        41285(일산동)→ 0건       41280(고양시) → 12,231건
+
+    시군구 코드는 10 단위로 배정되고 끝자리(1·3·5·7)만 일반구에 쓰인다.
+    따라서 끝자리가 0이 아니면 10 단위로 내림하면 상위 시가 된다.
+    자치구(11650 서초)·시(51150 강릉)·군(41820 가평)은 이미 0으로 끝나 영향이 없다.
+
+    내림이 혹시 틀리더라도 손해가 없다 — 상위 시는 해당 구의 상위집합이라
+    조회 결과가 넓어질 뿐 누락되지 않는다.
+
+    이 정규화가 없으면 성남·용인·수원·고양·안양·안산·부천·청주·천안·전주·포항·창원을
+    지나는 경로에서 그 시군구 충전소가 통째로 빠진다(경부·영동 축 한복판).
+    """
+    if len(zscode) == 5 and zscode[-1] != "0":
+        return zscode[:4] + "0"
+    return zscode
+
+
 async def _districts_for_path(
     path: list[LatLng], samples: int = 16
 ) -> list[tuple[str, str]]:
@@ -356,7 +464,7 @@ async def _districts_for_path(
     districts: list[tuple[str, str]] = []
     for code in codes:
         if code and len(code) >= 5:
-            d = (code[:2], code[:5])
+            d = (code[:2], normalize_zscode(code[:5]))
             if d not in districts:
                 districts.append(d)
     return districts
@@ -402,6 +510,35 @@ async def stations_near_path(path: list[LatLng], radius_km: float = 12.0) -> lis
         st
         for st in _MOCK_STATIONS
         if any(_haversine_km(pt, st.location) <= radius_km for pt in path)
+    ]
+
+
+async def stations_in_district(
+    zcode: str, zscode: str, with_status: bool = False
+) -> list[StationSummary]:
+    """시군구 단위 충전소 목록 — 경로와 무관한 지역 탐색 지도용(화면 S-06).
+
+    카탈로그(24h 캐시)를 그대로 쓰므로 시군구당 하루 1회만 실제 호출이 나간다.
+    with_status=True일 때만 20초 상태 캐시를 추가로 읽어 '지금 비어있는 충전기 수'를
+    채운다 — 기본으로 켜면 지역을 훑기만 해도 상태 조회가 계속 나가므로 꺼둔다.
+    """
+    zscode = normalize_zscode(zscode)
+    stations = await _get_catalog(zcode, zscode)
+    if not with_status:
+        return stations
+
+    rows = await _status_rows(zcode, zscode)
+    free: dict[str, int] = {}
+    for r in rows:
+        sid = r.get("statId")
+        if sid:
+            free[sid] = free.get(sid, 0) + (1 if r.get("stat") == "2" else 0)
+    # 캐시에 담긴 객체를 그대로 고치면 카탈로그 캐시가 오염된다 → 복사본에 채운다.
+    return [
+        s.model_copy(
+            update={"free_chargers": free.get(s.id, 0), "available": free.get(s.id, 0) > 0}
+        )
+        for s in stations
     ]
 
 

@@ -43,6 +43,10 @@
 2. URL에 위 `/health` 주소, 실행 주기 **매 10분**
 3. 저장 (인증 불필요 — `/health`는 토큰 검사 대상이 아니다)
 
+> **혼잡 예측(docs/07)을 켰다면 이 크론은 필요 없다.** 아래 6장의 수집 크론이
+> 5분마다 `/internal/collect`를 부르므로 keep-alive를 겸한다. 둘 다 걸면
+> 호출만 두 배가 된다 → **수집 크론으로 대체하고 `/health` 크론은 삭제할 것.**
+
 이렇게 하면 서비스가 잠들지 않아 **콜드스타트도, 카탈로그 재빌드도 없어진다.**
 Render 무료는 월 750 인스턴스시간이고 한 달은 ~730시간이라 **서비스 1개는 상시
 가동해도 쿼터 안에 든다.**
@@ -143,7 +147,138 @@ Render 무료는 월 750 인스턴스시간이고 한 달은 ~730시간이라 **
 
 ---
 
-## 6. 배포 후 점검
+## 6. 성수기 혼잡 예측 켜기 (선택)
+
+이 절을 건너뛰어도 앱은 그대로 동작한다. `DATABASE_URL`이 비어 있으면 예측 기능만
+꺼지고 경로 계획·지도·충전소 조회는 영향이 없다. 설계 근거는 [docs/07](docs/07-확장설계안-성수기혼잡.md).
+
+### 6-1. Postgres 준비
+
+[Neon](https://neon.tech) 또는 [Supabase](https://supabase.com) 무료 프로젝트를 만들고
+접속 문자열을 복사한다. 둘 다 0.5GB·만료 없음이고, 5분마다 쓰기가 들어가므로
+유휴 절전에 걸리지 않는다.
+
+> **SQLite를 쓰면 안 된다.** Render 무료 웹 서비스는 파일시스템이 휘발성이라
+> 재배포·재시작마다 초기화된다. 몇 주 모은 데이터가 배포 한 번에 사라지면
+> 콜드스타트가 영원히 끝나지 않는다.
+>
+> **Render 무료 Postgres도 권하지 않는다** — 무료 인스턴스에 만료 정책이 있어
+> 만료되면 데이터가 사라진다.
+
+**Supabase를 쓸 때 — 반드시 Session pooler 문자열을 쓸 것**
+
+Dashboard 우측 상단 **Connect** 버튼에서 세 가지 문자열이 나온다. 고를 것은 하나뿐이다.
+
+| 방식 | 호스트 | 판정 |
+|---|---|---|
+| Direct connection | `db.<ref>.supabase.co:5432` | ❌ **IPv6 전용.** DNS에 A 레코드가 없어 Render에서 붙지 않는다(실측: 조회 실패) |
+| **Session pooler** | `aws-N-<리전>.pooler.supabase.com:5432` | ✅ **이걸 쓴다.** IPv4 |
+| Transaction pooler | `aws-N-<리전>.pooler.supabase.com:6543` | ⚠ 되지만 굳이 |
+
+- 사용자명이 `postgres`가 아니라 **`postgres.<프로젝트ref>`** 형식이다. 복사한 문자열을
+  그대로 쓰면 되고, 직접 조립하지 말 것.
+- 두 풀러 모드 모두 동작하도록 `app/db.py`에서 `statement_cache_size=0`을 준다.
+  트랜잭션 모드는 prepared statement를 지원하지 않아 이 설정이 없으면 깨진다.
+- 프로젝트 URL(`https://<ref>.supabase.co`)은 **REST API 주소지 접속 문자열이 아니다.**
+  `DATABASE_URL`에 넣으면 연결되지 않는다.
+
+### 6-2. Render 환경변수
+
+| 키 | 값 |
+|---|---|
+| `DATABASE_URL` | 위에서 복사한 접속 문자열 (`?sslmode=require` 포함) |
+| `COLLECT_TOKEN` | 새로 만든 임의 문자열. **`API_TOKEN`과 다른 값** |
+| `COLLECT_DISTRICTS` | 비워둔다(회랑 기본값 19곳) |
+
+⚠ `COLLECT_TOKEN`을 `API_TOKEN`과 같게 두면 안 된다. `API_TOKEN`은 프런트 번들에
+노출되므로, 페이지를 연 사람이면 누구나 수집을 트리거해 공공 API 쿼터를 태울 수 있다.
+
+저장하면 Render가 자동 재시작하고, 기동 시 `app/schema.sql`이 한 번 실행되어
+테이블이 만들어진다(이미 있으면 아무 일도 안 한다).
+
+### 6-3. 크론 2개
+
+**(a) 수집 — 5분마다** (기존 `/health` keep-alive 크론을 이것으로 **대체**한다)
+
+```
+POST https://<백엔드>.onrender.com/internal/collect
+헤더: X-Collect-Key: <COLLECT_TOKEN>
+주기: 매 5분
+```
+
+주기를 **10분보다 길게 잡으면 안 된다.** 공공 API 상태 피드의 윈도가 10분 고정이라
+그 사이 변경분을 영구히 놓친다. 5분은 2배로 겹쳐 읽어 크론 지연에도 결측이 없게 한 값이다.
+
+**(b) 집계 — 하루 1회 (KST 새벽 4시 권장)**
+
+```
+POST https://<백엔드>.onrender.com/internal/aggregate
+헤더: X-Collect-Key: <COLLECT_TOKEN>
+주기: 매일 04:00 (KST)
+```
+
+### 6-4. 동작 확인
+
+먼저 접속부터 확인한다. 이 스크립트는 **비밀번호를 출력하지 않는다**(호스트·포트만).
+
+```bash
+cd backend && python check_db.py
+```
+
+```
+대상: aws-0-ap-northeast-2.pooler.supabase.com:5432  DB=postgres
+  Supavisor 세션 풀러 (포트 5432) — 둘 다 지원합니다.
+✓ 연결 성공 — PostgreSQL 15.x
+  테이블: occupancy_stat, session
+  세션 0건 / 충전소 0곳 / 최초관측 -
+  집계 셀 0개 (예측에 실제로 쓰이는 셀 0개)
+```
+
+연결이 되면 크론을 건다.
+
+```bash
+curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
+  https://<백엔드>.onrender.com/internal/collect
+# {"ok":true,"feed_rows":13629,"targets":312,"sessions_seen":45,"budget_left":1998}
+```
+
+`ok:false`일 때의 `reason`:
+
+| reason | 뜻 |
+|---|---|
+| `db_unavailable` | `DATABASE_URL` 미설정이거나 연결 실패 |
+| `ev_api_key_missing` | `EV_STATION_API_KEY` 미설정 |
+| `daily_budget_exhausted` | 자체 일일 예산 소진 (KST 자정에 리셋) |
+| `no_targets` | 카탈로그에서 대상 충전소를 못 찾음 |
+| `already_running` | 이전 수집이 아직 도는 중(정상. 다음 발화가 처리) |
+
+집계 결과의 `cells_ready`가 **예측에 실제로 쓰이는 셀 수**다.
+
+```bash
+curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
+  https://<백엔드>.onrender.com/internal/aggregate
+# {"ok":true,"cells":0,"cells_ready":0,"sessions":45,"pruned":"DELETE 0"}
+```
+
+### 6-5. 언제부터 화면에 나오나
+
+관측일이 임계(8일) 미만이면 예측하지 않고 표시도 하지 않는다 — **추측값을 내지 않는
+것이 설계 의도다.** 평일 시간대는 약 2주, 주말은 약 4주 뒤부터 `cells_ready`가 오르고
+계획 화면에 혼잡 배지가 붙기 시작한다. 연휴는 통계가 쌓일 때까지 주말 통계로 대체하며,
+그 경우 화면에 "주말 기준"이라고 함께 표기된다.
+
+### 6-6. 쿼터 영향
+
+| 항목 | 일 호출 |
+|---|---|
+| 상태 피드 (2페이지 × 5분 주기) | 576 |
+| 회랑 카탈로그 (24h 캐시) | 20 |
+| 기존 사용자 트래픽 | ~300 |
+| **합계** | **약 900 / 10,000 = 9%** |
+
+---
+
+## 7. 배포 후 점검
 
 ```bash
 # 1) 백엔드 살아있는지

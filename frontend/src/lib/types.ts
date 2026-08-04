@@ -17,6 +17,8 @@ export interface RoutePlanRequest {
   destination: string;
   current_charge_pct: number;
   temperature_c: number;
+  /** 출발 예정 시각(ISO 8601). 없으면 서버가 '지금'으로 본다. 서버에 저장되지 않는다. */
+  depart_at?: string;
 }
 
 export interface AltStation {
@@ -40,6 +42,56 @@ export interface ChargePoint {
   charge_to_pct: number | null;
   charge_kwh: number | null;
   charge_min: number | null;
+  /** 출발 후 이 충전소 도착까지 걸리는 시간(분). 혼잡 예측 기준 시각. */
+  arrive_after_min: number | null;
+  /** 성수기 혼잡 예측. 수집 데이터가 부족하면 null → 화면에 표시하지 않는다. */
+  congestion: StationCongestion | null;
+}
+
+/**
+ * 도착 예정 시각 기준 혼잡 예측.
+ *
+ * wait_lo~wait_hi를 구간으로 보여주는 이유: 대기시간은 관측값이 아니라
+ * 점유 통계에서 유도한 파생 추정치라 분 단위 정밀도를 주장할 근거가 없다.
+ * 등급(level)은 **색만으로 표현하지 말고 반드시 텍스트를 함께** 낸다(WCAG AA).
+ */
+export interface StationCongestion {
+  level: "여유" | "보통" | "혼잡";
+  wait_min: number; // 계획에 반영된 기대 대기(분)
+  wait_lo: number;
+  wait_hi: number;
+  confidence: "낮음" | "보통" | "높음";
+  n_days: number; // 근거가 된 관측일 수
+  daytype_fallback: string | null; // "weekend" = 연휴 통계가 없어 주말로 대체
+}
+
+export interface CongestionAlternative {
+  saved_min: number;
+  total_charge_min: number;
+  stations: string[]; // 대안 계획의 충전소 이름
+  avoided: string[]; // 피한 혼잡 충전소 이름
+  note: string;
+}
+
+export interface DepartOption {
+  offset_h: number; // 기준 대비 시간(음수 = 일찍)
+  depart_at: string;
+  total_trip_min: number;
+  charge_wait_min: number;
+  feasible: boolean;
+}
+
+/**
+ * 출발 시각별 비교.
+ *
+ * ⚠ **정체 차이는 반영되지 않는다.** 카카오 실시간 교통은 현재 시점만 제공해
+ * 미래 출발 시각의 정체를 알 수 없다. 달라지는 것은 충전 대기뿐이다.
+ */
+export interface DepartOptionsResponse {
+  base_depart_at: string;
+  options: DepartOption[];
+  best_offset_h: number | null;
+  note: string;
 }
 
 export interface CongestionStretch {
@@ -92,6 +144,21 @@ export interface RoutePlanResponse {
   charge_points: ChargePoint[];
   path: LatLng[];
   data_source: string;
+  /** 계획에 반영된 예상 충전 대기 합(분). 수집 데이터가 없으면 null. */
+  congestion_wait_min: number | null;
+  congestion_alternative: CongestionAlternative | null;
+}
+
+/** 지역 탐색 지도(/explore)용 충전소. free_chargers/available은 with_status일 때만 채워진다. */
+export interface StationSummary {
+  id: string;
+  name: string;
+  location: LatLng;
+  charger_types: string[];
+  max_power_kw: number;
+  public_access: boolean;
+  free_chargers: number | null;
+  available: boolean | null;
 }
 
 export interface RealtimeCharger {

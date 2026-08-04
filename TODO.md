@@ -8,6 +8,9 @@
       (404여도 서비스는 깨지만, 계속 실패하면 잡이 자동 비활성화될 수 있음)
 - [ ] **카카오 REST API 키 재발급** — 스크린샷으로 노출됨.
       재발급 후 Render 환경변수 `KAKAO_REST_API_KEY` 교체 (저장하면 자동 재시작)
+- [ ] **공공 EV API 키 재발급** — 2026-08-04 세션에서 `getChargerStatus` 검증 중 평문 노출됨.
+      재발급 후 Render 환경변수 `EV_STATION_API_KEY` 교체.
+      ⚠ 반드시 **일반 인증키(Decoding)** 를 넣을 것 (Encoding 키는 이중 인코딩되어 실패)
 - [ ] **카카오 JavaScript 키에 도메인 등록 확인** — 지도가 안 뜨면 이것.
       경로: 앱 설정 → 앱 → 플랫폼 키 → **JavaScript 키** → JavaScript SDK 도메인
       값: `https://haji-charge-route.vercel.app`
@@ -50,5 +53,6 @@ cd backend
 python test_planning.py            # 안전마진·접근성분류·목적지 최소잔량·직행 선충전
 python test_consumption.py         # 소비모델(온도/속도/회생), 출발 선충전 공식
 python test_external_stability.py  # 재시도·쿼터소진(402) vs 일시제한(429) 구분
+python test_congestion.py          # 혼잡 예측 콜드스타트·추정식·성수기 회귀·zscode 정규화
 cd ../frontend && npx tsc --noEmit
 ```

@@ -37,3 +37,13 @@ services:
         value: production
       - key: MOCK_ENABLED
         value: "false" # 실주행 앱이므로 추정 경로로 조용히 폴백하지 않는다
+      # --- 성수기 충전 혼잡 예측 (docs/07) ---
+      # 비워두면 예측 기능만 꺼지고 경로 계획은 그대로 동작한다.
+      - key: DATABASE_URL
+        sync: false # Neon/Supabase 무료 Postgres. Render 무료는 디스크가 휘발성이라 SQLite 불가
+      - key: COLLECT_TOKEN
+        sync: false # ⚠ API_TOKEN과 다른 값. API_TOKEN은 프런트 번들에 노출된다
+      - key: COLLECT_DISTRICTS
+        sync: false # 비우면 회랑 기본값 19곳
+      - key: COLLECT_DAILY_BUDGET
+        value: "2000"

@@ -35,7 +35,7 @@ import {
   warmupRoute,
   type ShortcutItem,
 } from "@/lib/api";
-import type { RoutePlanResponse } from "@/lib/types";
+import type { RoutePlanResponse, StationCongestion } from "@/lib/types";
 
 type Place = { label: string; value: string };
 
@@ -211,17 +211,28 @@ export default function MainPage() {
           </h1>
           <p className="text-xs text-slate-500">BYD 돌핀 스탠다드 기준</p>
         </div>
-        {plan && (
+        <div className="flex items-center gap-1">
+          {/* 경로와 무관하게 지역 충전소를 훑는 화면. 여행지 도착 후에도 쓴다. */}
           <button
-            onClick={handleRefresh}
-            disabled={refreshCooldown}
-            aria-label="충전소 상태 새로고침"
-            title="충전소 상태 새로고침"
-            className="rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-[var(--byd-primary)] disabled:opacity-40"
+            onClick={() => router.push("/explore")}
+            aria-label="지역 충전소 탐색"
+            title="지역 충전소 탐색"
+            className="rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-[var(--byd-primary)]"
           >
-            <RefreshIcon />
+            <SearchAreaIcon />
           </button>
-        )}
+          {plan && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshCooldown}
+              aria-label="충전소 상태 새로고침"
+              title="충전소 상태 새로고침"
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-[var(--byd-primary)] disabled:opacity-40"
+            >
+              <RefreshIcon />
+            </button>
+          )}
+        </div>
       </header>
 
       {/* 즐겨찾기: 채워진 칸은 탭하면 현재 포커스된 입력칸에 넣고, 빈 칸은 탭해서 등록.
@@ -437,8 +448,31 @@ export default function MainPage() {
           </div>
           <p className="mt-1.5 text-center text-[11px] text-slate-500">
             주행 {plan.duration_min}분 + 충전·정차 {plan.total_charge_min}분
+            {plan.congestion_wait_min != null &&
+              ` (충전 대기 예상 ${plan.congestion_wait_min}분 포함)`}
             {plan.plan_method === "dp" && " · 충전커브 시간최적화(DP)"}
           </p>
+
+          {/* 혼잡 충전소를 피한 대안. 10분 이상 줄어들 때만 서버가 내려준다. */}
+          {plan.congestion_alternative && (
+            <div className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs ring-1 ring-sky-200">
+              <p className="font-semibold text-sky-800">
+                🕒 {plan.congestion_alternative.note}
+              </p>
+              <p className="mt-1 text-sky-700">
+                피할 곳: {plan.congestion_alternative.avoided.join(", ")}
+              </p>
+              {plan.congestion_alternative.stations.length > 0 && (
+                <p className="mt-0.5 text-sky-700">
+                  대신 이용: {plan.congestion_alternative.stations.join(" → ")}
+                </p>
+              )}
+              <p className="mt-1 text-[10px] text-sky-600">
+                충전 대기는 과거 이용 이력으로 추정한 참고값입니다. 실제와 다를 수
+                있습니다.
+              </p>
+            </div>
+          )}
 
           {!plan.feasible && (
             <p
@@ -516,6 +550,9 @@ export default function MainPage() {
                               available={cp.available}
                               reason={cp.status_reason}
                             />
+                          )}
+                          {cp.congestion && (
+                            <CongestionBadge c={cp.congestion} />
                           )}
                         </span>
                       </div>
@@ -764,6 +801,45 @@ function StationLink({
 }
 
 // 사용가능/불가 상태 아이콘 (초록/빨강/회색 점 + 사유)
+// 도착 예정 시각 기준 혼잡 예측 배지.
+//
+// 접근성: 혼잡도를 **색으로만 표현하지 않는다** — 등급 텍스트("혼잡 예상")를 항상
+// 함께 낸다. 색약 사용자나 흑백 출력에서 점 색깔만으로는 구분이 안 되기 때문이다.
+//
+// 대기시간을 "25분"이 아니라 "20~30분" 구간으로 쓰는 이유: 이 값은 관측한 게 아니라
+// 점유 통계에서 유도한 추정치라 분 단위 정밀도를 주장할 근거가 없다(docs/07 §9-1).
+function CongestionBadge({ c }: { c: StationCongestion }) {
+  const color =
+    c.level === "혼잡" ? "#ef4444" : c.level === "보통" ? "#f59e0b" : "#10b981";
+  return (
+    <span
+      className="mt-0.5 inline-flex flex-wrap items-center justify-end gap-1 text-[11px]"
+      style={{ color }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "9999px",
+          background: color,
+          display: "inline-block",
+        }}
+      />
+      {c.level === "혼잡" ? "혼잡 예상" : `충전 대기 ${c.level}`}
+      {c.wait_hi > 0 && (
+        <span className="text-slate-500">
+          · 대기 {c.wait_lo}~{c.wait_hi}분
+        </span>
+      )}
+      <span className="text-slate-400">
+        (신뢰도 {c.confidence}
+        {c.daytype_fallback === "weekend" && ", 주말 기준"})
+      </span>
+    </span>
+  );
+}
+
 function AvailBadge({
   available,
   reason,
@@ -793,6 +869,21 @@ function AvailBadge({
       />
       {text}
     </span>
+  );
+}
+
+// 지역 탐색(돋보기 + 위치 핀)
+function SearchAreaIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M20 20l-3.5-3.5M11 8v6M8 11h6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

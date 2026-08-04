@@ -12,10 +12,12 @@
 
 import { withLoading } from "./loading";
 import type {
+  DepartOptionsResponse,
   PlaceResult,
   RoutePlanRequest,
   RoutePlanResponse,
   StationDetail,
+  StationSummary,
 } from "./types";
 
 const API_BASE =
@@ -154,6 +156,60 @@ export async function getCurrentTemperature(
   } catch {
     return null;
   }
+}
+
+/** 출발 시각별 총 소요시간 비교. 경로 조회는 서버에서 1회만 하고 DP만 반복한다.
+ *  ⚠ 정체 변화는 반영되지 않는다 — 달라지는 건 충전 대기뿐이다. */
+export async function getDepartOptions(
+  body: RoutePlanRequest
+): Promise<DepartOptionsResponse> {
+  return withLoading(
+    (async () => {
+      const res = await req(
+        `${API_BASE}/api/route/depart-options`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        PLAN_TIMEOUT_MS
+      );
+      if (!res.ok) throw new Error(await errText(res, "출발시각 비교 실패"));
+      return res.json();
+    })()
+  );
+}
+
+export interface DistrictQuery {
+  lat: number;
+  lng: number;
+  fastOnly?: boolean;
+  openOnly?: boolean;
+  minKw?: number;
+  withStatus?: boolean;
+}
+
+/** 좌표가 속한 시군구 전체의 충전소 목록 (지역 탐색 지도).
+ *  시군구 코드는 서버가 좌표에서 역산한다 — 앱에 전국 코드표를 심지 않기 위해서다
+ *  (행정구역 개편 때마다 죽는다. 강원 42 → 51처럼). */
+export async function getDistrictStations(
+  q: DistrictQuery
+): Promise<StationSummary[]> {
+  const p = new URLSearchParams({
+    lat: String(q.lat),
+    lng: String(q.lng),
+    fast_only: String(q.fastOnly ?? false),
+    open_only: String(q.openOnly ?? true),
+    min_kw: String(q.minKw ?? 0),
+    with_status: String(q.withStatus ?? false),
+  });
+  return withLoading(
+    (async () => {
+      const res = await req(`${API_BASE}/api/stations/district?${p}`, undefined, PLAN_TIMEOUT_MS);
+      if (!res.ok) throw new Error(await errText(res, "지역 충전소 조회 실패"));
+      return res.json();
+    })()
+  );
 }
 
 export async function getStation(id: string): Promise<StationDetail> {

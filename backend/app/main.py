@@ -4,17 +4,21 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import http
+from . import db, http
 from .config import settings
 from .http import QuotaExceeded, RateLimited
 from .ratelimit import rate_limit_middleware
-from .routers import places, route, stations, weather
+from .routers import internal, places, route, stations, weather
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 앱 생존 동안 외부기관용 공유 커넥션 풀 유지, 종료 시 정리.
+    # db.connect()는 실패해도 예외를 내지 않는다 — DB는 혼잡 예측 전용이고,
+    # 그것 때문에 경로 계획까지 못 뜨면 안 된다.
+    await db.connect()
     yield
+    await db.aclose()
     await http.aclose()
 
 
@@ -89,6 +93,7 @@ app.include_router(route.router)
 app.include_router(stations.router)
 app.include_router(places.router)
 app.include_router(weather.router)
+app.include_router(internal.router)
 
 
 @app.get("/health")

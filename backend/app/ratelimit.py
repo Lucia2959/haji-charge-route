@@ -20,10 +20,14 @@ from fastapi.responses import JSONResponse
 # 사용자가 누르는 plan 과 달리 앱 진입 시 자동 발사되므로 더 낮게 잡는다.
 _LIMITS: list[tuple[str, int]] = [
     ("/api/route/plan", 20),
+    ("/api/route/depart-options", 10),  # plan을 7회 반복하므로 더 낮게
     ("/api/route/warmup", 10),
     ("/api/places/search", 40),
     ("/api/weather/current", 40),
     ("/api/stations", 60),
+    # 크론이 5분에 1회 부르는 경로. 넉넉히 잡아도 분당 2회면 충분하고,
+    # 토큰이 새더라도 공공 API 쿼터를 태울 속도를 여기서 묶는다.
+    ("/internal/", 2),
 ]
 _DEFAULT_LIMIT = 120
 _WINDOW_SEC = 60.0
@@ -56,9 +60,10 @@ def _bucket(path: str) -> tuple[str, int]:
 
 
 async def rate_limit_middleware(request: Request, call_next):
-    # 헬스체크·문서는 제한하지 않음
+    # 헬스체크·문서는 제한하지 않음. /internal/은 크론이 부르지만 제한 대상이다
+    # (토큰이 새면 그것만으로 공공 API 쿼터가 탈 수 있다).
     path = request.url.path
-    if not path.startswith("/api/"):
+    if not (path.startswith("/api/") or path.startswith("/internal/")):
         return await call_next(request)
 
     ip = request.client.host if request.client else "unknown"

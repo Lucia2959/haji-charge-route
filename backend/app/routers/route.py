@@ -19,18 +19,25 @@ plan_route()의 처리 순서 (순서 자체가 성능·정확도에 중요하�
 """
 
 import asyncio
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..models import (
     AltStation,
     ChargePoint,
+    CongestionAlternative,
     CongestionStretch,
+    DepartOption,
+    DepartOptionsResponse,
     DestinationCharging,
     OriginPrecharge,
     RoutePlanRequest,
     RoutePlanResponse,
+    StationCongestion,
 )
+from ..services import congestion as congestion_svc
 from ..services import ev_stations, kakao
 from ..services.charging import (
     DOLPHIN_STANDARD,
@@ -91,9 +98,29 @@ async def warmup(req: RoutePlanRequest) -> dict:
         return {"ok": False, "stations": 0}
 
 
-@router.post("/plan", response_model=RoutePlanResponse)
-async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
-    """출발지·도착지·현충전량 → 경로 + (외부환경 보정) 충전예상지점수 계산."""
+@dataclass
+class _Ctx:
+    """경로 계획과 출발시각 추천이 공유하는 준비 결과.
+
+    지오코딩·경로조회·충전소 카탈로그는 출발 시각과 무관하다. 출발시각 추천은
+    이걸 한 번만 만들고 DP만 여러 번 돌린다 → 외부 호출이 늘지 않는다.
+    """
+
+    origin: LatLng
+    dest: LatLng
+    directions: dict
+    path: list[LatLng]
+    distance_km: float
+    duration_min: float
+    avg_speed: float
+    r_eff: float
+    f_temp: float
+    f_speed: float
+    stations: list[StationSummary]
+
+
+async def _prepare(req: RoutePlanRequest) -> _Ctx:
+    """지오코딩 → 경로 → 유효거리 → 경로 인근 충전소. (실시간 상태는 데우지 않음)"""
     try:
         origin = await kakao.geocode(req.origin)
         dest = await kakao.geocode(req.destination)
@@ -110,28 +137,51 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
             status_code=502,
             detail="실제 도로 경로를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.",
         )
-    path = directions["path"]
     distance_km = directions["distance_km"]
     duration_min = directions["duration_min"]
-
     # 평균속도 = 거리 / 소요시간 → 주행시간 계산용(실제 교통 반영)
     avg_speed = distance_km / (duration_min / 60.0) if duration_min > 0 else 60.0
     # 유효거리 = 도로 구간별(실제속도·고속도로여부) 소비전력 적산 (온도·속도·회생 반영)
-    highway_km = directions.get("highway_km", 0.0)
-    local_km = directions.get("local_km", distance_km)
     segments = directions.get("segments") or [(distance_km, avg_speed, False)]
     r_eff, f_temp, f_speed = effective_range_from_segments(
         DOLPHIN_STANDARD.range_km, DOLPHIN_STANDARD.capacity_kwh,
         req.temperature_c, segments,
     )
+    stations = await ev_stations.stations_near_path(directions["path"])
+    return _Ctx(
+        origin=origin, dest=dest, directions=directions, path=directions["path"],
+        distance_km=distance_km, duration_min=duration_min, avg_speed=avg_speed,
+        r_eff=r_eff, f_temp=f_temp, f_speed=f_speed, stations=stations,
+    )
+
+
+def _depart_at(req: RoutePlanRequest) -> datetime:
+    """요청의 출발 시각(없으면 지금). 혼잡 예측의 기준 시각이다."""
+    if req.depart_at is not None:
+        dt = req.depart_at
+        # 타임존 없는 값은 KST로 본다(앱이 국내 전용이라 그게 사용자 의도다).
+        return dt if dt.tzinfo else dt.replace(tzinfo=congestion_svc.KST)
+    return datetime.now(congestion_svc.KST)
+
+
+@router.post("/plan", response_model=RoutePlanResponse)
+async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
+    """출발지·도착지·현충전량 → 경로 + (외부환경 보정) 충전예상지점수 계산."""
+    ctx = await _prepare(req)
+    origin, dest = ctx.origin, ctx.dest
+    directions = ctx.directions
+    path, distance_km, duration_min = ctx.path, ctx.distance_km, ctx.duration_min
+    avg_speed, r_eff, f_temp, f_speed = ctx.avg_speed, ctx.r_eff, ctx.f_temp, ctx.f_speed
+    stations = ctx.stations
+    highway_km = directions.get("highway_km", 0.0)
+    local_km = directions.get("local_km", distance_km)
+
     # 정체·지체로 인한 자유주행 대비 추가 소비(kWh) + 지도 표시용 구간
     congestion = directions.get("congestion", [])
     extra_kwh = congestion_extra_kwh(
         [(c["distance_km"], c["speed_kmh"], c["is_highway"]) for c in congestion],
         req.temperature_c, DOLPHIN_STANDARD.capacity_kwh, DOLPHIN_STANDARD.range_km,
     )
-
-    stations = await ev_stations.stations_near_path(path)
 
     # 경로가 지나는 시군구들의 실시간 상태를 병렬로 미리 데운다(중복 시군구 1회,
     # bounded). 이후 목적지·배정·대체 충전소 상태 조회가 모두 캐시 히트가 되어
@@ -150,11 +200,18 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
         if res and res[0]:  # 외부인 이용가능
             dest_open = (s, res[1])
             break
+    # 성수기 충전 대기 예측을 미리 배치 조회해 DP에 클로저로 주입한다.
+    # 데이터가 부족하면 wait_min()이 0을 돌려주므로 기존 고정 오버헤드로 폴백된다.
+    depart_at = _depart_at(req)
+    wl = await congestion_svc.wait_lookup(
+        [s.id for s in stations], depart_at, duration_min
+    )
+
     # 충전 커브 기반 DP 시간최적화 (총 주행+충전 시간 최소, 부분충전 결정).
     # 목적지에 충전소가 있어도 도착 시 실시간 사용불가 대비 최소 15%를 남기도록 계획한다.
     charge_points, usable_now, feasible, charge_min = plan_charging_dp(
         path, req.current_charge_pct, r_eff, avg_speed, stations,
-        DOLPHIN_STANDARD,
+        DOLPHIN_STANDARD, wait_min_fn=wl.wait_min,
     )
     plan_method = "dp"
     if not feasible:
@@ -176,6 +233,15 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
 
     # 배정 충전소 실시간 상태 조회 + 사용불가 시 대체 충전소
     await _enrich_availability(charge_points, stations)
+
+    # 도착 예정 시각 기준 혼잡 예측을 응답에 싣고, 혼잡 지점을 피한 대안을 계산한다.
+    _attach_congestion(charge_points, wl)
+    total_wait = sum(
+        cp.congestion.wait_min for cp in charge_points if cp.congestion is not None
+    )
+    congestion_alt = _congestion_alternative(
+        ctx, req, charge_points, wl, duration_min + charge_min
+    )
 
     # 출발지 근처 선충전 권장.
     #   · 경로상 충전이 있으면  → 1차 충전소 도달 안전마진(정체·현장불가) 기준
@@ -233,6 +299,138 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
         charge_points=charge_points,
         path=path,
         data_source=directions["source"],
+        congestion_wait_min=int(round(total_wait)) if total_wait > 0 else None,
+        congestion_alternative=congestion_alt,
+    )
+
+
+# 대안 계획이 이만큼은 줄여야 제시한다. 이보다 작으면 예측 오차 범위 안이라
+# 사용자에게 선택지를 늘려줄 뿐 도움이 안 된다.
+_ALT_MIN_SAVING_MIN = 10.0
+# 출발시각 추천 탐색 범위(시간). ±3시간을 1시간 간격 → 기준 포함 7회 DP.
+_DEPART_OFFSETS = (-3, -2, -1, 0, 1, 2, 3)
+
+
+def _attach_congestion(charge_points: list[ChargePoint], wl) -> None:
+    """각 배정 충전소에 도착 예정 시각 기준 혼잡 예측을 붙인다.
+
+    데이터가 부족하거나 DB가 없으면 congestion=None으로 두어 화면에서 빠지게 한다.
+    '데이터 부족'을 굳이 표시하지 않는 이유: 아직 수집이 안 된 초기에는 모든
+    충전소가 그 상태라 화면이 경고로 도배된다.
+    """
+    for cp in charge_points:
+        if not cp.station_id or cp.arrive_after_min is None:
+            continue
+        p = wl.at(cp.station_id, cp.arrive_after_min)
+        if p is None or p.status != "ok":
+            continue
+        cp.congestion = StationCongestion(
+            level=p.level,
+            wait_min=p.wait_min,
+            wait_lo=p.wait_lo,
+            wait_hi=p.wait_hi,
+            confidence=p.confidence,
+            n_days=p.n_days,
+            daytype_fallback=p.daytype_fallback or None,
+        )
+
+
+def _congestion_alternative(
+    ctx: _Ctx,
+    req: RoutePlanRequest,
+    charge_points: list[ChargePoint],
+    wl,
+    base_total_min: float,
+) -> CongestionAlternative | None:
+    """혼잡으로 예측된 충전소를 빼고 한 번 더 계획해 총 시간을 비교한다.
+
+    후보를 하나씩 앞뒤로 바꿔가며 여러 번 돌리지 않고, 혼잡 지점을 한꺼번에
+    제외한 계획 1회만 돌린다. DP가 웜 0.4초라 1회는 예산 안이고, 실제로
+    사용자가 알고 싶은 것은 "붐비는 데를 피하면 얼마나 빨라지나" 하나다.
+    """
+    busy = {
+        cp.station_id: cp.station_name or cp.station_id
+        for cp in charge_points
+        if cp.station_id and cp.congestion and cp.congestion.level == "혼잡"
+    }
+    if not busy:
+        return None
+    reduced = [s for s in ctx.stations if s.id not in busy]
+    if not reduced:
+        return None
+
+    alt_points, _, feasible, alt_charge_min = plan_charging_dp(
+        ctx.path, req.current_charge_pct, ctx.r_eff, ctx.avg_speed, reduced,
+        DOLPHIN_STANDARD, wait_min_fn=wl.wait_min,
+    )
+    if not feasible:
+        return None  # 혼잡해도 그 충전소가 없으면 완주 불가 → 대안이 아니다
+    saved = base_total_min - (ctx.duration_min + alt_charge_min)
+    if saved < _ALT_MIN_SAVING_MIN:
+        return None
+
+    names = [cp.station_name or "" for cp in alt_points]
+    return CongestionAlternative(
+        saved_min=int(round(saved)),
+        total_charge_min=int(round(alt_charge_min)),
+        stations=names,
+        avoided=list(busy.values()),
+        note=f"혼잡 예상 충전소를 피하면 총 소요시간이 약 {int(round(saved))}분 짧아집니다.",
+    )
+
+
+@router.post("/depart-options", response_model=DepartOptionsResponse)
+async def depart_options(req: RoutePlanRequest) -> DepartOptionsResponse:
+    """같은 경로를 여러 출발 시각으로 시뮬레이션해 총 소요시간을 비교한다.
+
+    경로·충전소 조회는 **1회만** 하고 DP만 7번 돌린다 → 외부 API 호출이 늘지 않는다.
+
+    ⚠ 정체 차이는 반영되지 않는다. 카카오 실시간 교통은 현재 시점만 제공하므로
+    미래 출발 시각의 정체를 알 수 없다. 여기서 달라지는 것은 충전 대기뿐이다.
+    """
+    ctx = await _prepare(req)
+    base = _depart_at(req)
+    station_ids = [s.id for s in ctx.stations]
+
+    options: list[DepartOption] = []
+    for off in _DEPART_OFFSETS:
+        depart = base + timedelta(hours=off)
+        wl = await congestion_svc.wait_lookup(station_ids, depart, ctx.duration_min)
+        points, _, feasible, charge_min = plan_charging_dp(
+            ctx.path, req.current_charge_pct, ctx.r_eff, ctx.avg_speed, ctx.stations,
+            DOLPHIN_STANDARD, wait_min_fn=wl.wait_min,
+        )
+        wait = sum(
+            wl.wait_min(cp.station_id, cp.arrive_after_min or 0.0)
+            for cp in points
+            if cp.station_id
+        )
+        options.append(
+            DepartOption(
+                offset_h=off,
+                depart_at=depart,
+                total_trip_min=int(round(ctx.duration_min + charge_min)),
+                charge_wait_min=int(round(wait)),
+                feasible=feasible,
+            )
+        )
+
+    usable = [o for o in options if o.feasible]
+    baseline = next((o for o in options if o.offset_h == 0), None)
+    best = min(usable, key=lambda o: o.total_trip_min) if usable else None
+    best_off = (
+        best.offset_h
+        if best is not None
+        and baseline is not None
+        and best.offset_h != 0
+        and baseline.total_trip_min - best.total_trip_min >= _ALT_MIN_SAVING_MIN
+        else None
+    )
+    return DepartOptionsResponse(
+        base_depart_at=base,
+        options=options,
+        best_offset_h=best_off,
+        note="충전 대기 예상치 기준입니다. 도로 정체 변화는 반영되지 않습니다.",
     )
 
 

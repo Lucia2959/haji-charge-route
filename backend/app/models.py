@@ -10,6 +10,7 @@ Optional 필드의 의미: `None`은 "값이 없음"이 아니라 대부분 **"�
 않음"**이다. 화면은 이런 필드를 렌더에서 제외한다(빈 값을 표시하지 않는다).
 """
 
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -26,6 +27,11 @@ class RoutePlanRequest(BaseModel):
     destination: str = Field(..., min_length=1, max_length=200, description="도착지 (주소·지명 또는 'lng,lat')")
     current_charge_pct: float = Field(..., ge=0, le=100, description="현충전량 (%)")
     temperature_c: float = Field(20.0, ge=-40, le=60, description="외부 기온 (°C)")
+    # 혼잡 예측의 기준 시각. 없으면 '지금'. 타임존이 없으면 KST로 해석한다.
+    # 서버에 저장하지 않는다 — 이 요청 처리 중에만 쓰인다(개인정보 요구사항).
+    depart_at: Optional[datetime] = Field(
+        None, description="출발 예정 시각(ISO 8601). 미지정 시 현재 시각"
+    )
 
 
 class AltStation(BaseModel):
@@ -36,6 +42,23 @@ class AltStation(BaseModel):
     location: LatLng
     available: bool
     status_reason: str
+
+
+class StationCongestion(BaseModel):
+    """도착 예정 시각 기준 충전소 혼잡 예측.
+
+    wait_min은 계획(DP)이 실제로 더한 값이고, wait_lo~wait_hi는 화면 표기용 구간이다.
+    단일 숫자로 보여주지 않는 이유: 대기시간은 관측값이 아니라 점유 통계에서
+    유도한 파생 추정치라, 분 단위 정밀도를 주장할 근거가 없다. docs/07 §9-1.
+    """
+
+    level: str            # "여유" | "보통" | "혼잡"
+    wait_min: float       # 계획에 반영된 기대 대기(분)
+    wait_lo: int          # 표기 구간 하한
+    wait_hi: int          # 표기 구간 상한
+    confidence: str       # "낮음" | "보통" | "높음"
+    n_days: int           # 근거가 된 관측일 수
+    daytype_fallback: Optional[str] = None  # "weekend" = 연휴 통계가 없어 주말로 대체
 
 
 class ChargePoint(BaseModel):
@@ -55,6 +78,10 @@ class ChargePoint(BaseModel):
     charge_to_pct: Optional[float] = None
     charge_kwh: Optional[float] = None
     charge_min: Optional[float] = None
+    # 출발 후 이 충전소에 도착하기까지 걸리는 시간(분). 혼잡 예측 조회 기준 시각이다.
+    arrive_after_min: Optional[float] = None
+    # 성수기 혼잡 예측 (docs/07). 데이터가 부족하면 congestion=None → 화면 미표시.
+    congestion: Optional[StationCongestion] = None
 
 
 class CongestionStretch(BaseModel):
@@ -122,6 +149,47 @@ class RoutePlanResponse(BaseModel):
     charge_points: list[ChargePoint]
     path: list[LatLng]  # 지도 폴리라인용 경로 좌표
     data_source: str  # "kakao" | "mock"
+    # 성수기 혼잡 (docs/07). 수집 데이터가 없으면 둘 다 None → 화면에 안 나온다.
+    congestion_wait_min: Optional[int] = None  # 계획에 반영된 예상 충전 대기 합(분)
+    congestion_alternative: Optional["CongestionAlternative"] = None
+
+
+class CongestionAlternative(BaseModel):
+    """혼잡 충전소를 피한 대안 계획 요약.
+
+    전체 계획을 다시 싣지 않고 '얼마나 줄어드는지 + 어디로 바뀌는지'만 준다.
+    사용자가 받아들이면 그 충전소를 제외하고 다시 계산하면 된다.
+    """
+
+    saved_min: int              # 총 소요시간 단축(분)
+    total_charge_min: int       # 대안의 충전·정차 시간
+    stations: list[str]         # 대안 계획의 충전소 이름(순서대로)
+    avoided: list[str]          # 피한 혼잡 충전소 이름
+    note: str
+
+
+class DepartOption(BaseModel):
+    """출발 시각 후보 1건."""
+
+    offset_h: int          # 기준 출발시각 대비 시간(음수=일찍)
+    depart_at: datetime
+    total_trip_min: int    # 주행 + 충전·정차
+    charge_wait_min: int   # 그중 예상 충전 대기
+    feasible: bool
+
+
+class DepartOptionsResponse(BaseModel):
+    """출발 시각별 총 소요시간 비교.
+
+    **정체 차이는 반영되지 않는다.** 카카오 실시간 교통은 현재 시점만 제공하므로
+    미래 출발 시각의 정체를 알 수 없다. 여기서 달라지는 것은 충전 대기뿐이며,
+    화면에도 그렇게 고지해야 한다. docs/07 §F4.
+    """
+
+    base_depart_at: datetime
+    options: list[DepartOption]
+    best_offset_h: Optional[int] = None  # 기준 대비 유의하게 나은 후보가 있으면
+    note: str
 
 
 class RealtimeCharger(BaseModel):
@@ -154,6 +222,9 @@ class StationSummary(BaseModel):
     # 외부인(비인가자)이 이용 가능한가. 입주민·관계자·특정차량 전용이면 False.
     # 카탈로그의 limitYn/limitDetail로 판정하며, 충전계획 후보에서 제외하는 데 쓴다.
     public_access: bool = True
+    # 지역 탐색 지도에서 실시간 상태를 함께 요청했을 때만 채워진다(기본 None).
+    free_chargers: Optional[int] = None  # 지금 '충전가능'인 충전기 수
+    available: Optional[bool] = None     # free_chargers > 0
 
 
 class StationDetail(StationSummary):

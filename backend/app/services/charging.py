@@ -11,6 +11,7 @@ PPT 기획 2번: "현충전량을 출발지·도착지 사이에 충전소 충�
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..models import ChargePoint, LatLng, StationSummary
@@ -552,6 +553,7 @@ def plan_charging_dp(
     spec: VehicleSpec = DOLPHIN_STANDARD,
     detour_km: float = 8.0,
     soc_step: int = 5,
+    wait_min_fn: Callable[[str, float], float] | None = None,
 ) -> tuple[list[ChargePoint], float, bool, float]:
     """충전 커브 기반 시간최적화(DP).
 
@@ -561,6 +563,19 @@ def plan_charging_dp(
 
     상태 dp[node][soc] = 해당 노드에 해당 SoC로 도착하는 최소 시간(분).
     노드: 출발지(0) · 후보 충전소(경로순) · 목적지. 인접 노드로만 전이(통과 허용).
+
+    wait_min_fn(station_id, elapsed_min) → 예상 충전 대기(분).
+      성수기 혼잡을 정지 오버헤드에 더하기 위한 주입점이다. 이 모듈은 외부 의존이
+      없어야 하므로(DB·네트워크 금지) 콜백으로 받는다. 호출 측이 예측을 미리 조회해
+      클로저로 넘기면 DP 실행 중에는 계산만 일어난다.
+
+      **상태 차원을 늘리지 않아도 되는 이유**: dp[i][ai]가 이미 "그 노드에 그 SoC로
+      도착하는 최소 경과시간(분)"이다. 도착 시각 = 출발시각 + 그 값이므로 시각을
+      따로 상태로 들 필요가 없다. 격자 크기가 그대로라 계산량도 그대로다.
+
+      # ponytail: 근사다. 대기가 시간에 따라 변하므로 "더 늦게 도착하지만 총합은
+      # 더 짧은" 경로를 놓칠 수 있다. 실측에서 문제가 되면 그때 시간 차원을 추가한다
+      # (지금 넣으면 상태 수가 시간 버킷 수만큼 곱해진다).
 
     Returns: (charge_points, usable_now_km, feasible, total_charge_min)
     """
@@ -628,9 +643,15 @@ def plan_charging_dp(
             for bi in dep_list:
                 d_soc = socs[bi]
                 if d_soc > a_soc:  # 충전: 순수충전시간 + 정지 오버헤드 + 우회 + 진출입
+                    # 혼잡 대기는 정지 오버헤드에 더한다 — 충전기를 잡기 전까지의
+                    # 시간이라 충전 속도(power_i)와 무관하기 때문이다.
+                    wait = (
+                        wait_min_fn(st_i.id, base) if (wait_min_fn and st_i) else 0.0
+                    )
                     ct = (
                         _charge_minutes(a_soc, d_soc, power_i, cap)
                         + _STOP_OVERHEAD_MIN
+                        + wait
                         + 2 * off_i / v * 60.0
                         + exit_penalty
                     )
@@ -666,23 +687,28 @@ def plan_charging_dp(
         return [], usable_now, False, 0.0
 
     # 역추적: 충전(b>a)이 일어난 노드 수집
-    charges: list[tuple[int, float, float]] = []
+    # dp[pi][pai] = 그 충전소에 도착하는 최소 경과시간(분). 대기 예측 조회에 쓴다.
+    charges: list[tuple[int, float, float, float]] = []
     ci, si = dest, best_idx
     while par[ci][si] is not None:
         pi, pai, pbi = par[ci][si]
         a_soc, d_soc = socs[pai], socs[pbi]
         if d_soc > a_soc:
-            charges.append((pi, a_soc, d_soc))
+            charges.append((pi, a_soc, d_soc, dp[pi][pai]))
         ci, si = pi, pai
     charges.reverse()
 
     result: list[ChargePoint] = []
     pure_charge_min = 0.0
-    for order, (ni, a_soc, d_soc) in enumerate(charges, start=1):
+    total_wait_min = 0.0
+    for order, (ni, a_soc, d_soc, elapsed) in enumerate(charges, start=1):
         pos, off, st = nodes[ni]
         assert st is not None
         cm = _charge_minutes(a_soc, d_soc, st.max_power_kw, cap)
         pure_charge_min += cm
+        # DP 전이에서 쓴 것과 같은 값을 다시 구해 표시·합산에 쓴다.
+        wait = wait_min_fn(st.id, elapsed) if wait_min_fn else 0.0
+        total_wait_min += wait
         result.append(
             ChargePoint(
                 order=order,
@@ -694,8 +720,11 @@ def plan_charging_dp(
                 charge_to_pct=round(d_soc),
                 charge_kwh=round(cap * (d_soc - a_soc) / 100.0, 1),
                 charge_min=round(cm),
+                arrive_after_min=round(elapsed),
             )
         )
-    # 충전·정차 시간 = 순수 충전 + 정지당 오버헤드
-    charge_stop_min = pure_charge_min + len(charges) * _STOP_OVERHEAD_MIN
+    # 충전·정차 시간 = 순수 충전 + 정지당 오버헤드 + 예상 혼잡 대기
+    charge_stop_min = (
+        pure_charge_min + len(charges) * _STOP_OVERHEAD_MIN + total_wait_min
+    )
     return result, usable_now, True, round(charge_stop_min, 0)
