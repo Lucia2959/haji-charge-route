@@ -27,6 +27,13 @@ class RoutePlanRequest(BaseModel):
     destination: str = Field(..., min_length=1, max_length=200, description="도착지 (주소·지명 또는 'lng,lat')")
     current_charge_pct: float = Field(..., ge=0, le=100, description="현충전량 (%)")
     temperature_c: float = Field(20.0, ge=-40, le=60, description="외부 기온 (°C)")
+    # 고속도로·자동차전용 구간에서 낼 순항속도. 미입력이면 실시간 교통속도를 그대로 쓴다.
+    # 일반도로에는 적용하지 않는다 — 제한속도 편차가 커 교통속도가 더 나은 추정치다.
+    # 실제 계산 속도는 법정 범위로 clamp된 뒤 실시간 교통속도가 상한이 된다
+    # (정체 구간을 희망속도로 덮어써 소비를 과소평가하는 것을 막기 위해).
+    cruise_speed_kmh: Optional[float] = Field(
+        None, ge=30, le=150, description="고속도로 순항속도 (km/h). 미입력 시 실시간 교통속도"
+    )
     # 혼잡 예측의 기준 시각. 없으면 '지금'. 타임존이 없으면 KST로 해석한다.
     # 서버에 저장하지 않는다 — 이 요청 처리 중에만 쓰인다(개인정보 요구사항).
     depart_at: Optional[datetime] = Field(
@@ -141,6 +148,11 @@ class RoutePlanResponse(BaseModel):
     speed_factor: float  # 속도 보정계수 (도로유형별 제한속도 거리가중 blend)
     highway_km: float  # 고속도로 주행거리
     local_km: float  # 일반도로 주행거리
+    # 사용자가 입력한 순항속도(없으면 None)와, 실제 계산에 쓰인 고속도로 평균속도.
+    # 둘을 함께 내려야 "내가 넣은 값이 반영됐는지"를 산출근거에서 확인할 수 있다.
+    # 정체가 있으면 applied < 입력값이 되는 것이 정상이다.
+    cruise_speed_kmh: Optional[float] = None
+    highway_speed_kmh: Optional[float] = None
     # 정체·지체 (실시간 교통 기준)
     jam_km: float  # 정체 거리
     delay_km: float  # 지체 거리

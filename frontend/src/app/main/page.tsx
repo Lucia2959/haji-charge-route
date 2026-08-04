@@ -62,6 +62,8 @@ export default function MainPage() {
   const [charge, setCharge] = useState("50");
   const [temp, setTemp] = useState("20");
   const [tempAuto, setTempAuto] = useState(false); // 기상청 자동입력 여부
+  // 고속도로 순항속도(선택). 빈 문자열이면 서버에 보내지 않아 실시간 교통속도가 쓰인다.
+  const [cruise, setCruise] = useState("");
   // picker: 출발/도착 선택 또는 즐겨찾기 슬롯 지정(shortcut:<index>)
   const [picker, setPicker] = useState<string | null>(null);
   const [shortcuts, setShortcuts] = useState<(ShortcutItem | null)[]>(() =>
@@ -162,6 +164,8 @@ export default function MainPage() {
         destination: destination.value,
         current_charge_pct: Number(charge),
         temperature_c: Number(temp),
+        // 빈 값이면 아예 보내지 않는다 — 0을 보내면 서버 검증(ge=30)에 걸린다.
+        ...(cruise ? { cruise_speed_kmh: Number(cruise) } : {}),
       }),
     onSuccess: (p) => {
       savePlan(p);
@@ -179,6 +183,8 @@ export default function MainPage() {
         destination: destination.value,
         current_charge_pct: Number(charge),
         temperature_c: Number(temp),
+        // 빈 값이면 아예 보내지 않는다 — 0을 보내면 서버 검증(ge=30)에 걸린다.
+        ...(cruise ? { cruise_speed_kmh: Number(cruise) } : {}),
       }),
   });
 
@@ -207,6 +213,7 @@ export default function MainPage() {
         destination: destination.value,
         current_charge_pct: Number(charge),
         temperature_c: Number(t),
+        ...(cruise ? { cruise_speed_kmh: Number(cruise) } : {}),
       });
       setPlan(updated);
       savePlan(updated);
@@ -338,12 +345,28 @@ export default function MainPage() {
               className="input"
             />
           </Field>
+          <Field label="고속도로 순항 (km/h)">
+            <input
+              value={cruise}
+              onChange={(e) => setCruise(e.target.value)}
+              type="number"
+              min={30}
+              max={150}
+              placeholder="자동"
+              className="input"
+            />
+          </Field>
         </div>
         {tempAuto && (
           <p className="-mt-1 text-[11px] text-slate-500">
             🌡 Open-Meteo 기준 출발지 현재 기온 자동입력 (수정 가능)
           </p>
         )}
+        <p className="-mt-1 text-[11px] text-slate-500">
+          🛣 순항속도는 고속도로·자동차전용 구간에만 적용됩니다(법정 최저~최고 범위로
+          조정). 비워두면 실시간 교통속도를 그대로 씁니다. 정체 구간은 입력값과 무관하게
+          실제 교통속도로 계산합니다.
+        </p>
       </div>
 
       <button
@@ -676,10 +699,27 @@ export default function MainPage() {
                 </li>
                 <li className="text-slate-500">
                   ↳ 속도 {plan.speed_factor.toFixed(2)} = 유효거리 ÷ (정격×온도) 등가값.
-                  총평균이 아니라 <b>구간별 실제 교통속도</b>(카카오)로 소비를 적산 → 정체
-                  구간일수록 소비에 더 크게 반영. 참고 평균{" "}
+                  단일 속도의 계수가 아니라 <b>구간별 실제 속도</b>로 소비를 적산한 뒤
+                  역산한 값 → 정체 구간일수록 소비에 더 크게 반영. 참고 평균{" "}
                   <b>{plan.avg_speed_kmh}km/h</b> (총 {plan.total_distance_km}km ÷{" "}
                   {plan.duration_min}분, 실시간 교통 반영)
+                </li>
+                {/* 사용자 순항속도가 실제로 어떻게 반영됐는지 — 입력값과 적용값을 함께.
+                    정체가 있으면 적용값이 입력값보다 낮은 것이 정상이다. */}
+                <li className="text-sky-300">
+                  ↳ 고속도로·자동차전용 계산속도{" "}
+                  <b>{plan.highway_speed_kmh ?? "-"}km/h</b>
+                  {plan.cruise_speed_kmh != null ? (
+                    <>
+                      {" "}(입력 {plan.cruise_speed_kmh}km/h → 법정범위 조정 후 실시간
+                      교통속도를 상한으로 적용)
+                    </>
+                  ) : (
+                    <> (순항속도 미입력 → 실시간 교통속도 그대로)</>
+                  )}
+                  {plan.highway_km > 0 && (
+                    <> · 해당 구간 {plan.highway_km}km</>
+                  )}
                 </li>
                 {(plan.jam_km > 0 || plan.delay_km > 0) && (
                   <li className="text-amber-300">

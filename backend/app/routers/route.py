@@ -42,8 +42,10 @@ from ..services import ev_stations, kakao
 from ..services.charging import (
     DOLPHIN_STANDARD,
     _haversine_km,
+    apply_cruise_speed,
     congestion_extra_kwh,
     effective_range_from_segments,
+    highway_avg_speed,
     origin_precharge_advice,
     plan_charging_dp,
     recommend_charging_stops,
@@ -117,6 +119,7 @@ class _Ctx:
     f_temp: float
     f_speed: float
     stations: list[StationSummary]
+    highway_speed: float | None  # 실제 계산에 쓰인 고속도로·자동차전용 평균속도
 
 
 async def _prepare(req: RoutePlanRequest) -> _Ctx:
@@ -142,7 +145,10 @@ async def _prepare(req: RoutePlanRequest) -> _Ctx:
     # 평균속도 = 거리 / 소요시간 → 주행시간 계산용(실제 교통 반영)
     avg_speed = distance_km / (duration_min / 60.0) if duration_min > 0 else 60.0
     # 유효거리 = 도로 구간별(실제속도·고속도로여부) 소비전력 적산 (온도·속도·회생 반영)
-    segments = directions.get("segments") or [(distance_km, avg_speed, False)]
+    segments = directions.get("segments") or [(distance_km, avg_speed, "local")]
+    # 사용자 순항속도를 고속도로·자동차전용 구간에만 반영한 뒤 소비를 적산한다.
+    # 미입력이면 그대로 통과하므로 기존 동작과 동일하다.
+    segments = apply_cruise_speed(segments, req.cruise_speed_kmh)
     r_eff, f_temp, f_speed = effective_range_from_segments(
         DOLPHIN_STANDARD.range_km, DOLPHIN_STANDARD.capacity_kwh,
         req.temperature_c, segments,
@@ -152,6 +158,7 @@ async def _prepare(req: RoutePlanRequest) -> _Ctx:
         origin=origin, dest=dest, directions=directions, path=directions["path"],
         distance_km=distance_km, duration_min=duration_min, avg_speed=avg_speed,
         r_eff=r_eff, f_temp=f_temp, f_speed=f_speed, stations=stations,
+        highway_speed=highway_avg_speed(segments),
     )
 
 
@@ -293,6 +300,8 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
         speed_factor=round(f_speed, 3),
         highway_km=highway_km,
         local_km=local_km,
+        cruise_speed_kmh=req.cruise_speed_kmh,
+        highway_speed_kmh=ctx.highway_speed,
         jam_km=directions.get("jam_km", 0.0),
         delay_km=directions.get("delay_km", 0.0),
         congestion_extra_kwh=extra_kwh,

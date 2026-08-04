@@ -210,27 +210,87 @@ def consumption_wh_per_km(
     return traction + aux + hvac + batt
 
 
+# 도로 등급별 법정 속도 범위 (최저, 최고) km/h.
+#
+# 카카오 경로 응답에는 제한속도 필드가 없어 도로 등급으로 근사한다.
+#   고속도로   : 최저 50 / 최고는 노선별 100·110·120 → 110으로 대표
+#   자동차전용 : 최저 30 / 최고 80~90               → 90으로 대표
+#
+# 최고값을 높게 잡을수록 소비를 크게 보아 유효거리가 짧아진다(=방전 위험 쪽으로
+# 안전). 그래서 노선별 편차는 높은 쪽으로 대표값을 잡았다.
+# 일반도로는 제한속도 편차가 너무 커(30~80) 사용자 순항속도를 적용하지 않는다 —
+# 여기서는 실시간 교통속도가 훨씬 나은 추정치다.
+SPEED_LIMITS: dict[str, tuple[float, float]] = {
+    "highway": (50.0, 110.0),
+    "expressway": (30.0, 90.0),
+}
+
+
+def apply_cruise_speed(
+    segments: list[tuple[float, float, str]], cruise_kmh: float | None
+) -> list[tuple[float, float, str]]:
+    """사용자 희망 순항속도를 고속도로·자동차전용 구간에만 반영한다.
+
+    구간 속도 = min( clamp(희망속도, 법정최저, 법정최고), 실시간 교통속도 )
+
+    두 단계인 이유가 각각 있다.
+      · clamp — 120을 원해도 그 도로에서 낼 수 없는 속도는 계산에 넣지 않는다.
+                반대로 40을 넣어도 최저속도 미만으로는 못 달린다.
+      · min   — **정체를 지우지 않기 위해서다.** 희망속도로 덮어쓰면 강원 상습정체
+                구간이 100km/h로 계산되어 소비가 과소평가되고, 그게 곧 방전 위험이다.
+                교통이 막히면 희망속도와 무관하게 교통속도가 상한이다.
+
+    희망속도가 없으면(None) 기존과 동일하게 실시간 교통속도를 그대로 쓴다.
+    """
+    if not cruise_kmh or cruise_kmh <= 0:
+        return segments
+    out: list[tuple[float, float, str]] = []
+    for d, v, rc in segments:
+        limit = SPEED_LIMITS.get(rc)
+        if limit is None:  # 일반도로 — 교통속도 그대로
+            out.append((d, v, rc))
+            continue
+        target = min(max(cruise_kmh, limit[0]), limit[1])
+        out.append((d, min(target, v), rc))
+    return out
+
+
+def highway_avg_speed(segments: list[tuple[float, float, str]]) -> float | None:
+    """고속도로·자동차전용 구간의 거리가중 평균속도. 없으면 None.
+
+    산출근거에 '어떤 속도로 계산했는지'를 보여주기 위한 값이다. 이게 없으면
+    사용자는 자기가 넣은 순항속도가 실제로 반영됐는지 확인할 방법이 없다.
+    """
+    km = sum(d for d, _, rc in segments if rc in SPEED_LIMITS)
+    if km <= 0:
+        return None
+    return round(sum(d * v for d, v, rc in segments if rc in SPEED_LIMITS) / km, 1)
+
+
 def effective_range_from_segments(
     nominal_km: float,
     capacity_kwh: float,
     temp_c: float,
-    segments: list[tuple[float, float, bool]],
+    segments: list[tuple[float, float, str]],
 ) -> tuple[float, float, float]:
-    """구간별(거리·실제속도·고속도로여부) 소비를 적산해 유효 주행거리 산출.
+    """구간별(거리·실제속도·도로등급) 소비를 적산해 유효 주행거리 산출.
 
-    segments: [(distance_km, speed_kmh, is_highway), ...] (카카오 도로별)
+    segments: [(distance_km, speed_kmh, road_class), ...] (카카오 도로별)
+      road_class: "highway" | "expressway" | "local"
     총 소비에너지 = Σ 거리·소비(Wh/km) → 유효거리 = 배터리용량 / 평균소비.
 
     Returns: (effective_range_km, f_temp, f_speed_equiv)
       f_speed_equiv = 유효거리 / (정격 × 온도계수) — 화면 표시용 등가 속도계수.
+      **단일 속도의 speed_factor()가 아니다.** 구간별 소비를 적산한 결과를
+      역산한 등가값이라, 회생·보조부하·공조까지 섞여 들어가 있다.
     """
     ft = temp_factor(temp_c)
     total_km = sum(d for d, _, _ in segments)
     if total_km <= 0:
         return nominal_km * ft, ft, 1.0
     total_wh = sum(
-        d * consumption_wh_per_km(v, temp_c, hw, capacity_kwh, nominal_km)
-        for d, v, hw in segments
+        d * consumption_wh_per_km(v, temp_c, rc != "local", capacity_kwh, nominal_km)
+        for d, v, rc in segments
     )
     eff = capacity_kwh * 1000.0 / (total_wh / total_km) if total_wh > 0 else nominal_km
     fs_equiv = eff / (nominal_km * ft) if nominal_km * ft > 0 else 1.0

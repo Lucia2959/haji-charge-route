@@ -19,6 +19,8 @@ export interface RoutePlanRequest {
   temperature_c: number;
   /** 출발 예정 시각(ISO 8601). 없으면 서버가 '지금'으로 본다. 서버에 저장되지 않는다. */
   depart_at?: string;
+  /** 고속도로·자동차전용 순항속도(km/h). 없으면 실시간 교통속도를 그대로 쓴다. */
+  cruise_speed_kmh?: number;
 }
 
 export interface AltStation {
@@ -137,6 +139,10 @@ export interface RoutePlanResponse {
   speed_factor: number;
   highway_km: number;
   local_km: number;
+  /** 사용자가 입력한 순항속도. 미입력이면 null. */
+  cruise_speed_kmh: number | null;
+  /** 실제 계산에 쓰인 고속도로·자동차전용 거리가중 평균속도. 정체가 있으면 입력값보다 낮다. */
+  highway_speed_kmh: number | null;
   jam_km: number;
   delay_km: number;
   congestion_extra_kwh: number;

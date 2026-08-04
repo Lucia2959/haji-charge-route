@@ -175,12 +175,22 @@ async def region_code(loc: LatLng) -> str | None:
 _HIGHWAY_ROAD_KW = ("고속도로", "고속화도로", "자동차전용")
 
 
-def _road_is_highway(name: str | None, speed_kmh: float) -> bool:
-    """고속도로/자동차전용 여부 — 도로명 또는 실제 주행속도(≥85km/h) 기준.
+def _road_class(name: str | None, speed_kmh: float) -> str:
+    """도로 등급 — "highway"(고속도로) / "expressway"(자동차전용) / "local".
 
-    이름만으로는 도시고속(강변북로 등)을 놓치므로 실제 속도도 함께 본다.
+    등급을 bool(고속도로 여부) 대신 문자열로 두는 이유: 법정 제한속도가 등급마다
+    다르기 때문이다(고속도로 50~110, 자동차전용 30~90). 카카오 경로 응답에는
+    제한속도 필드가 없어 등급으로 근사할 수밖에 없다 — charging.SPEED_LIMITS 참고.
+
+    이름만으로는 도시고속(강변북로 등)을 놓치므로 실제 주행속도도 함께 본다.
+    이름 없이 속도만으로 잡힌 구간은 고속도로로 단정할 수 없어 자동차전용으로 둔다.
     """
-    return any(k in (name or "") for k in _HIGHWAY_ROAD_KW) or speed_kmh >= 85.0
+    n = name or ""
+    if "고속도로" in n:
+        return "highway"
+    if any(k in n for k in ("고속화도로", "자동차전용")):
+        return "expressway"
+    return "expressway" if speed_kmh >= 85.0 else "local"
 
 
 def _interpolate(origin: LatLng, dest: LatLng, n: int = 24) -> list[LatLng]:
@@ -219,8 +229,8 @@ async def get_directions(origin: LatLng, dest: LatLng) -> dict:
             local_m = 0.0  # 일반도로/국도
             jam_m = 0.0  # 정체(traffic_state 4)
             delay_m = 0.0  # 지체(traffic_state 3)
-            # 소비 예측용 구간: (거리km, 실제속도km/h, 고속도로여부)
-            segments: list[tuple[float, float, bool]] = []
+            # 소비 예측용 구간: (거리km, 실제속도km/h, 도로등급)
+            segments: list[tuple[float, float, str]] = []
             # 지도 표시용 정체/지체 연속 스트레치
             congestion: list[dict] = []
             cur: dict | None = None  # 현재 스트레치 누적
@@ -264,8 +274,9 @@ async def get_directions(origin: LatLng, dest: LatLng) -> dict:
                     if not spd and dur > 0:
                         spd = (d / 1000.0) / (dur / 3600.0)
                     spd = float(spd) or 60.0
-                    hw = _road_is_highway(road.get("name"), spd)
-                    segments.append((d / 1000.0, spd, hw))
+                    rc = _road_class(road.get("name"), spd)
+                    hw = rc != "local"
+                    segments.append((d / 1000.0, spd, rc))
                     if hw:
                         highway_m += d
                     else:
