@@ -239,8 +239,15 @@ cd backend && python check_db.py
 ```bash
 curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
   https://<백엔드>.onrender.com/internal/collect
-# {"ok":true,"feed_rows":13629,"targets":312,"sessions_seen":45,"budget_left":1998}
+# {"ok":true,"feed_rows":13125,"targets":500,"sessions_seen":348,"budget_left":1998}
 ```
+
+`targets`가 **500 근처**여야 정상이다(회랑 19개 시군구 기준 실측).
+크게 벗어나면 저장량 추정(3.2MB/일 · 90일 290MB)이 무너지므로
+`collector._MIN_POWER_KW` 또는 `COLLECT_DISTRICTS`를 조정한다.
+
+첫 호출은 카탈로그 19개 시군구를 만드느라 **20초 안팎** 걸린다(이후 24시간 캐시).
+크론 타임아웃을 30초 이상으로 잡을 것.
 
 `ok:false`일 때의 `reason`:
 
@@ -257,8 +264,16 @@ curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
 ```bash
 curl -s -X POST -H "X-Collect-Key: <COLLECT_TOKEN>" \
   https://<백엔드>.onrender.com/internal/aggregate
-# {"ok":true,"cells":0,"cells_ready":0,"sessions":45,"pruned":"DELETE 0"}
+# {"ok":true,"cells":217,"cells_ready":0,"sessions":820,"pruned":"DELETE 0"}
 ```
+
+**수집 초기에 `cells_ready`가 0인 것이 정상이다.** 첫 수집 때 각 충전기의 직전
+세션이 함께 들어오지만(백필) 그 기간을 관측한 건 아니라서, 집계는 `station_seen`에
+기록된 관측 시작 이후만 쓴다. 여기서 0이 아닌 큰 값이 바로 나온다면 그건 근거 없는
+예측이라는 뜻이다.
+
+> `/internal/*`은 **분당 2회** 제한이다. `collect`와 `aggregate`를 연달아 부르면
+> 세 번째 호출이 429로 막힌다 — 수동 점검 시에는 1분 간격을 둔다.
 
 ### 6-5. 언제부터 화면에 나오나
 

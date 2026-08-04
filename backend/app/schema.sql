@@ -16,12 +16,36 @@ CREATE TABLE IF NOT EXISTS session (
   PRIMARY KEY (station_id, charger_id, started_at)
 );
 
--- 집계는 "이 충전소의 이 기간 세션 전부"를 훑는다.
-CREATE INDEX IF NOT EXISTS session_station_start_idx
-  ON session (station_id, started_at);
+-- 보조 인덱스를 두지 않는다. 실측(2026-08-04) 결과 이 테이블은 인덱스가 본체보다
+-- 훨씬 비싸다 — heap 65 B/행 vs 인덱스 3개 합계 206 B/행.
+--
+--   session_pkey               76 B/행   ← ON CONFLICT에 필요. 유지
+--   session_station_start_idx  76 B/행   ← 삭제. 집계는 어차피 테이블 대부분을 훑는다
+--   session_start_idx          54 B/행   ← 삭제. 하루 1회 DELETE에만 쓰였다
+--
+-- 무료 Postgres 500MB에서 행당 313 B → 141 B는 보관기간이 2배 이상 늘어나는 차이다.
+-- 이미 만들어진 DB에서도 지워지도록 DROP을 남겨둔다(멱등).
+DROP INDEX IF EXISTS session_station_start_idx;
+DROP INDEX IF EXISTS session_start_idx;
 
--- 오래된 세션 정리(보관기간 초과분 삭제)용.
-CREATE INDEX IF NOT EXISTS session_start_idx ON session (started_at);
+
+-- 충전소별 '관측 시작 시각'.
+--
+-- 왜 필요한가: 첫 수집 때 상태 피드가 각 충전기의 **직전 세션 1건**을 함께 준다
+-- (백필). 그 세션이 일주일 전 것일 수도 있는데, 그렇다고 그 일주일을 관측한 건
+-- 아니다 — 그 사이의 다른 세션들은 우리에게 없다. 이걸 구분하지 않으면 과거 구간이
+-- 통째로 '한산했음'으로 집계되고, 관측일 수(n_days)도 부풀어 콜드스타트 가드를
+-- 그냥 통과해버린다. 실측에서 수집 첫날에 cells_ready가 383개 나왔다.
+--
+-- 그래서 점유율 집계는 이 시각 이후 구간만 쓴다. 세션 길이 통계(svc_min_med)는
+-- 백필분도 유효하므로 그대로 쓴다.
+--
+-- 충전소 단위로 두는 이유: COLLECT_DISTRICTS를 나중에 넓히면 새로 들어온 충전소는
+-- 관측 시작이 그때부터다. 전역 마커 하나로는 이걸 구분하지 못한다.
+CREATE TABLE IF NOT EXISTS station_seen (
+  station_id    text        PRIMARY KEY,
+  first_seen_at timestamptz NOT NULL
+);
 
 
 -- 예측 조회용 집계. 하루 1회 갱신하고, 계획 API는 여기만 읽는다.

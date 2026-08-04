@@ -43,10 +43,20 @@ DAYTYPE_HOLIDAY = 2
 # 미만이면 예측하지 않고 '데이터 부족'을 명시한다. 추측값을 내지 않는다.
 MIN_DAYS = 8
 
-# 세션 보관 기간. 집계는 최근 8주만 쓰지만, 백테스트(완료기준 1)와
-# 연휴 통계 누적에는 1년이 필요하다. 회랑 기준 약 250MB로 무료 500MB 안에 든다.
-# 용량이 빠듯하면 여기를 180으로 줄이는 게 첫 번째 조정 지점이다.
-RETENTION_DAYS = 365
+# 세션 보관 기간.
+#
+# 실측(2026-08-04)으로 정했다. 대상 500곳 × 충전기 4대 × 세션 9.4건/일 ×
+# 141 B/행 = 약 2.7 MB/일이다.
+#
+#   90일  → 239 MB   ✅ 무료 500MB 대비 2배 여유
+#   180일 → 477 MB   (여유 없음)
+#   365일 → 967 MB   ❌
+#
+# 90일이면 집계 창(8주=56일)과 백테스트(10주=70일)를 모두 덮는다.
+# **연휴 통계는 이 기간으로 쌓이지 않는다** — 설계상 연휴는 통계가 찰 때까지
+# 주말 통계로 폴백하므로 기능은 성립한다(§7 콜드스타트).
+# 늘리려면 collector._MIN_POWER_KW를 함께 올려 대상을 줄여야 한다.
+RETENTION_DAYS = 90
 
 # 집계에 쓰는 관측 창(주). 계절성보다 최근 경향을 따르게 8주로 둔다.
 AGGREGATE_WEEKS = 8
@@ -268,12 +278,18 @@ WITH win AS (
   SELECT now() - interval '{AGGREGATE_WEEKS} weeks' AS from_ts
 ),
 sta AS (
+  -- 점유 재구성 구간은 **실제로 관측을 시작한 뒤**로만 잡는다.
+  -- 첫 수집의 백필(직전 세션 1건)이 일주일 전 것이면 MIN(started_at)은 일주일 전이
+  -- 되는데, 그 사이를 관측한 게 아니라서 전부 '한산'으로 잘못 집계된다.
+  -- station_seen.first_seen_at이 그 경계다.
   SELECT s.station_id,
-         COUNT(DISTINCT s.charger_id)::int      AS n_ch,
-         GREATEST(MIN(s.started_at), w.from_ts) AS first_ts
-    FROM session s CROSS JOIN win w
+         COUNT(DISTINCT s.charger_id)::int AS n_ch,
+         GREATEST(MIN(s.started_at), w.from_ts, ss.first_seen_at) AS first_ts
+    FROM session s
+    CROSS JOIN win w
+    JOIN station_seen ss ON ss.station_id = s.station_id
    WHERE s.started_at >= w.from_ts
-   GROUP BY s.station_id, w.from_ts
+   GROUP BY s.station_id, w.from_ts, ss.first_seen_at
 ),
 grid AS (
   SELECT sta.station_id, sta.n_ch, g.ts
@@ -357,7 +373,12 @@ async def aggregate() -> dict:
 
     holidays = sorted(_HOLIDAYS)
     async with p.acquire() as conn:
-        await conn.execute(_AGGREGATE_SQL, holidays)
+        # 전량 재계산이므로 기존 집계를 먼저 비운다. ON CONFLICT UPDATE만 쓰면
+        # 이번에 안 나온 셀(대상에서 빠진 충전소, 좁아진 관측 구간)이 옛 값 그대로
+        # 남아 계속 예측에 쓰인다. 트랜잭션으로 묶어 조회가 빈 표를 보지 않게 한다.
+        async with conn.transaction():
+            await conn.execute("DELETE FROM occupancy_stat")
+            await conn.execute(_AGGREGATE_SQL, holidays)
         cells = await conn.fetchval("SELECT COUNT(*) FROM occupancy_stat")
         ready = await conn.fetchval(
             "SELECT COUNT(*) FROM occupancy_stat WHERE n_days >= $1", MIN_DAYS

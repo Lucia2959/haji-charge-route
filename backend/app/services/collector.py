@@ -53,10 +53,19 @@ _DEFAULT_DISTRICTS: list[tuple[str, str]] = [
     ("51", "51830"),  # 강원 양양
 ]
 
-# 대상 충전소 판정: 급속이면서 외부인 이용가능하고, 고속도로 휴게소이거나 고출력.
-# 성수기 병목은 장거리 이동 중 들르는 고출력 급속에서 생긴다. 시내 완속까지 담으면
-# 세션 수가 몇 배가 되어 무료 Postgres 500MB를 몇 달 만에 채운다.
-_MIN_POWER_KW = 100.0
+# 대상 충전소 판정: 급속이면서 외부인 이용가능하고, 고속도로 휴게소이거나 초급속.
+#
+# 임계값을 실측으로 정했다(2026-08-04, 회랑 19개 시군구 카탈로그 기준).
+#
+#   급속·개방 전체        2,524곳
+#   휴게소 or ≥100kW      1,673곳 →  8.9 MB/일 → 90일 800MB   ❌ 무료 500MB 초과
+#   휴게소 or ≥200kW        500곳 →  2.7 MB/일 → 90일 239MB   ✅ 채택
+#   휴게소만                 94곳 →  0.5 MB/일               (너무 얇다)
+#
+# 100kW는 이제 도심 충전소에도 흔해서 변별력이 없다. 200kW(초급속)는 장거리
+# 이동 중 실제로 들르는 곳과 잘 겹치고, 휴게소는 출력과 무관하게 항상 포함된다.
+# 넓히고 싶으면 보관기간(congestion.RETENTION_DAYS)을 함께 줄여야 한다.
+_MIN_POWER_KW = 200.0
 
 # 비정상 세션 배제. 완속 야간 방치·기기 오류로 12시간짜리 '세션'이 들어오면
 # 점유율 통계가 통째로 망가진다.
@@ -185,6 +194,15 @@ async def collect_once() -> dict:
             continue
         seen.add(key)
         pending.append((sid, cid, started, ended))
+
+    async with p.acquire() as conn:
+        # 관측 시작 시각을 대상 전체에 대해 기록한다. 상태 변경이 없어 피드에 안 나온
+        # 충전소도 '관측 중이며 한산'이 맞으므로 pending이 아니라 targets 기준이다.
+        await conn.executemany(
+            "INSERT INTO station_seen (station_id, first_seen_at) VALUES ($1, now()) "
+            "ON CONFLICT (station_id) DO NOTHING",
+            [(sid,) for sid in targets],
+        )
 
     if pending:
         async with p.acquire() as conn:
