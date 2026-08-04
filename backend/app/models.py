@@ -152,6 +152,13 @@ class RoutePlanResponse(BaseModel):
     # 성수기 혼잡 (docs/07). 수집 데이터가 없으면 둘 다 None → 화면에 안 나온다.
     congestion_wait_min: Optional[int] = None  # 계획에 반영된 예상 충전 대기 합(분)
     congestion_alternative: Optional["CongestionAlternative"] = None
+    # 예측 준비 상태. 화면이 "기능이 없는 것"과 "아직 데이터를 모으는 중"을
+    # 구분해 보여주기 위한 값이다 — 없으면 사용자는 기능 존재 자체를 알 수 없다.
+    #   "off"        DB 미설정 → 기능 비활성
+    #   "collecting" 수집 중이나 관측일이 임계 미만 → 예측 안 함
+    #   "ready"      최소 한 곳 이상 예측이 붙었다
+    congestion_status: Optional[str] = None
+    congestion_days: Optional[int] = None  # 관측일 수(진행도). collecting일 때 유용
 
 
 class CongestionAlternative(BaseModel):

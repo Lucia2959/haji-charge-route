@@ -147,6 +147,10 @@ export interface RoutePlanResponse {
   /** 계획에 반영된 예상 충전 대기 합(분). 수집 데이터가 없으면 null. */
   congestion_wait_min: number | null;
   congestion_alternative: CongestionAlternative | null;
+  /** "off" DB 미설정 / "collecting" 수집 중(관측일 부족) / "ready" 예측 적용됨 */
+  congestion_status: "off" | "collecting" | "ready" | null;
+  /** 관측일 수. collecting일 때 진행도로 보여준다. */
+  congestion_days: number | null;
 }
 
 /** 지역 탐색 지도(/explore)용 충전소. free_chargers/available은 with_status일 때만 채워진다. */

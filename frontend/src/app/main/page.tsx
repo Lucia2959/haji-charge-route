@@ -24,6 +24,7 @@ import RouteStrip from "@/components/RouteStrip";
 import {
   clearAllRouteData,
   getCurrentTemperature,
+  getDepartOptions,
   loadForm,
   loadPlan,
   loadShortcuts,
@@ -35,7 +36,11 @@ import {
   warmupRoute,
   type ShortcutItem,
 } from "@/lib/api";
-import type { RoutePlanResponse, StationCongestion } from "@/lib/types";
+import type {
+  DepartOptionsResponse,
+  RoutePlanResponse,
+  StationCongestion,
+} from "@/lib/types";
 
 type Place = { label: string; value: string };
 
@@ -163,6 +168,18 @@ export default function MainPage() {
       setPlan(p);
       setResultOpen(true); // 계산 직후에는 결과를 펼쳐서 바로 표시
     },
+  });
+
+  // 출발 시각 비교(F4). 경로 조회는 서버에서 1회만 하고 DP만 7번 돌리므로
+  // 외부 API 호출이 늘지 않는다. 계획과 별개 엔드포인트라 계획 응답을 늦추지 않는다.
+  const departMut = useMutation({
+    mutationFn: () =>
+      getDepartOptions({
+        origin: origin.value,
+        destination: destination.value,
+        current_charge_pct: Number(charge),
+        temperature_c: Number(temp),
+      }),
   });
 
   // 새로고침: 그 시각 기준으로 온도·경로·충전소 상태를 전부 다시 통신.
@@ -452,6 +469,43 @@ export default function MainPage() {
               ` (충전 대기 예상 ${plan.congestion_wait_min}분 포함)`}
             {plan.plan_method === "dp" && " · 충전커브 시간최적화(DP)"}
           </p>
+
+          {/* 충전 대기 예측 상태 + 출발 시각 비교.
+              수집 초기(2~4주)에는 예측이 안 나오는데, 아무것도 표시하지 않으면
+              사용자는 이 기능이 있는지조차 모른다 → 진행 상태를 한 줄로 알린다. */}
+          {plan.congestion_status && plan.congestion_status !== "off" && (
+            <div className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-[11px] text-slate-600">
+              {plan.congestion_status === "ready" ? (
+                <>충전 대기 예측 적용 중 · 관측 {plan.congestion_days}일 기준</>
+              ) : (
+                <>
+                  충전 대기 예측: <b>데이터 수집 중</b>
+                  {plan.congestion_days ? ` (관측 ${plan.congestion_days}일)` : ""} —
+                  평일 약 2주, 주말 약 4주가 모이면 충전소별 혼잡도가 표시됩니다.
+                  그때까지는 추측하지 않고 계산에서 제외합니다.
+                </>
+              )}
+            </div>
+          )}
+
+          {plan.congestion_status === "ready" && (
+            <button
+              type="button"
+              onClick={() => departMut.mutate()}
+              disabled={departMut.isPending}
+              className="mt-2 w-full rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[var(--byd-primary)] ring-1 ring-slate-200 disabled:opacity-50"
+            >
+              {departMut.isPending ? "비교 중…" : "🕒 출발 시각 바꿔서 비교하기"}
+            </button>
+          )}
+
+          {departMut.isError && (
+            <p role="alert" className="mt-2 text-[11px] text-red-600">
+              {(departMut.error as Error).message}
+            </p>
+          )}
+
+          {departMut.data && <DepartTable data={departMut.data} />}
 
           {/* 혼잡 충전소를 피한 대안. 10분 이상 줄어들 때만 서버가 내려준다. */}
           {plan.congestion_alternative && (
@@ -801,6 +855,60 @@ function StationLink({
 }
 
 // 사용가능/불가 상태 아이콘 (초록/빨강/회색 점 + 사유)
+// 출발 시각별 총 소요시간 비교(F4).
+//
+// ⚠ **정체 차이는 반영되지 않는다.** 카카오 실시간 교통은 현재 시점만 주므로
+//    미래 출발 시각의 정체를 알 수 없다. 여기서 달라지는 것은 충전 대기뿐이며,
+//    그 사실을 표 아래에 그대로 고지한다(없으면 사용자가 정체까지 계산된 걸로 읽는다).
+function DepartTable({ data }: { data: DepartOptionsResponse }) {
+  const base = data.options.find((o) => o.offset_h === 0);
+  return (
+    <div className="mt-2 overflow-hidden rounded-lg ring-1 ring-slate-200">
+      <table className="w-full text-[11px]">
+        <caption className="sr-only">출발 시각별 예상 총 소요시간 비교</caption>
+        <thead className="bg-slate-50 text-slate-500">
+          <tr>
+            <th scope="col" className="px-2 py-1.5 text-left font-medium">출발</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">총 소요</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">충전 대기</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">기준 대비</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.options.map((o) => {
+            const diff = base ? o.total_trip_min - base.total_trip_min : 0;
+            const best = data.best_offset_h === o.offset_h;
+            return (
+              <tr
+                key={o.offset_h}
+                className={best ? "bg-emerald-50 font-semibold" : "border-t border-slate-100"}
+              >
+                <th scope="row" className="px-2 py-1.5 text-left font-normal">
+                  {o.offset_h === 0
+                    ? "지금"
+                    : `${o.offset_h > 0 ? "+" : ""}${o.offset_h}시간`}
+                  {/* 색만으로 추천을 표시하지 않는다(WCAG) */}
+                  {best && <span className="ml-1 text-emerald-700">← 추천</span>}
+                </th>
+                <td className="px-2 py-1.5 text-right">
+                  {o.feasible ? `${o.total_trip_min}분` : "완주 불가"}
+                </td>
+                <td className="px-2 py-1.5 text-right text-slate-500">
+                  {o.charge_wait_min}분
+                </td>
+                <td className="px-2 py-1.5 text-right">
+                  {diff === 0 ? "–" : `${diff > 0 ? "+" : ""}${diff}분`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="bg-slate-50 px-2 py-1.5 text-[10px] text-slate-500">{data.note}</p>
+    </div>
+  );
+}
+
 // 도착 예정 시각 기준 혼잡 예측 배지.
 //
 // 접근성: 혼잡도를 **색으로만 표현하지 않는다** — 등급 텍스트("혼잡 예상")를 항상

@@ -242,6 +242,7 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
     congestion_alt = _congestion_alternative(
         ctx, req, charge_points, wl, duration_min + charge_min
     )
+    cg_status, cg_days = _congestion_status(wl)
 
     # 출발지 근처 선충전 권장.
     #   · 경로상 충전이 있으면  → 1차 충전소 도달 안전마진(정체·현장불가) 기준
@@ -301,6 +302,8 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
         data_source=directions["source"],
         congestion_wait_min=int(round(total_wait)) if total_wait > 0 else None,
         congestion_alternative=congestion_alt,
+        congestion_status=cg_status,
+        congestion_days=cg_days,
     )
 
 
@@ -309,6 +312,23 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
 _ALT_MIN_SAVING_MIN = 10.0
 # 출발시각 추천 탐색 범위(시간). ±3시간을 1시간 간격 → 기준 포함 7회 DP.
 _DEPART_OFFSETS = (-3, -2, -1, 0, 1, 2, 3)
+
+
+def _congestion_status(wl) -> tuple[str | None, int | None]:
+    """예측 준비 상태 — 이미 받아둔 예측에서 도출한다(추가 쿼리 없음).
+
+    화면이 "기능이 없다"와 "아직 모으는 중"을 구분하지 못하면, 수집 첫 2주 동안
+    사용자는 이 기능이 존재하는지조차 알 수 없다. 그래서 진행도를 함께 내려준다.
+    """
+    preds = list(wl.preds.values())
+    if not preds:
+        return None, None
+    ok = [p for p in preds if p.status == "ok"]
+    if ok:
+        return "ready", max(p.n_days for p in ok)
+    if all(p.status == "unavailable" for p in preds):
+        return "off", None
+    return "collecting", max((p.n_days for p in preds), default=0)
 
 
 def _attach_congestion(charge_points: list[ChargePoint], wl) -> None:
