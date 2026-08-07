@@ -280,21 +280,28 @@ export default function MainPage() {
                 label={s.label}
                 onClick={() => fillActive(s.addr, s.label)}
               />
+              {/* 편집 진입점 하나만 둔다. 삭제(✕)를 칩에 같이 붙였더니 저장이 안 된
+                  것처럼 읽혔고, 24px 배지 두 개가 손가락으로 눌리지도 않았다.
+                  삭제는 이름 수정 모달 안으로 옮겼다.
+                  p-2.5: 보이는 아이콘은 24px로 두고 탭 영역만 44px로 넓힌다
+                  (24 + 10*2 = 44 — Apple HIG 최소 44pt / WCAG 2.5.5 AAA).
+                  -right-2(8px)는 탭 영역 오른쪽 끝을 gap(8px) 경계에 딱 맞춰
+                  옆 칩을 침범하지 않게 한다. 음수 마진을 같이 주면 offset에 더해져
+                  10px씩 더 밀려나 초기화 칩을 먹으므로 쓰지 않는다.
+                  ring은 흰 배경과의 경계 대비 3:1 확보(WCAG 1.4.11). */}
               <button
                 onClick={() =>
                   setNaming({ index: i, initial: s.label, addr: null })
                 }
-                aria-label={`${s.label} 즐겨찾기 이름 수정`}
-                className="absolute -left-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-slate-200 text-[11px] text-slate-600 hover:bg-slate-300"
+                aria-label={`${s.label} 즐겨찾기 이름 수정·삭제`}
+                className="absolute -right-2 -top-2 p-2.5"
               >
-                ✎
-              </button>
-              <button
-                onClick={() => setShortcut(i, null)}
-                aria-label={`${s.label} 즐겨찾기 삭제`}
-                className="absolute -right-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-slate-200 text-[11px] text-slate-600 hover:bg-slate-300"
-              >
-                ✕
+                <span
+                  aria-hidden
+                  className="grid h-6 w-6 place-items-center rounded-full bg-white text-[11px] text-slate-600 ring-1 ring-slate-400"
+                >
+                  ✎
+                </span>
               </button>
             </div>
           ) : (
@@ -321,7 +328,7 @@ export default function MainPage() {
             {origin.label || (
               <span className="text-slate-500">출발지 선택</span>
             )}
-            <span className="float-right text-slate-500">🔍</span>
+            <span aria-hidden className="float-right text-slate-500">🔍</span>
           </button>
         </Field>
         <Field label="도착지">
@@ -337,7 +344,7 @@ export default function MainPage() {
             {destination.label || (
               <span className="text-slate-500">도착지 선택</span>
             )}
-            <span className="float-right text-slate-500">🔍</span>
+            <span aria-hidden className="float-right text-slate-500">🔍</span>
           </button>
         </Field>
         <div className="flex gap-3 [&>label]:flex-1">
@@ -378,11 +385,11 @@ export default function MainPage() {
         </div>
         {tempAuto && (
           <p className="-mt-1 text-[11px] text-slate-500">
-            🌡 Open-Meteo 기준 출발지 현재 기온 자동입력 (수정 가능)
+            <span aria-hidden>🌡</span> Open-Meteo 기준 출발지 현재 기온 자동입력 (수정 가능)
           </p>
         )}
         <p className="-mt-1 text-[11px] text-slate-500">
-          🛣 순항속도는 고속도로·자동차전용 구간에만 적용됩니다(법정 최저~최고 범위로
+          <span aria-hidden>🛣</span> 순항속도는 고속도로·자동차전용 구간에만 적용됩니다(법정 최저~최고 범위로
           조정). 비워두면 실시간 교통속도를 그대로 씁니다. 정체 구간은 입력값과 무관하게
           실제 교통속도로 계산합니다.
         </p>
@@ -423,7 +430,9 @@ export default function MainPage() {
           role="alert"
           className="flex items-start gap-2.5 rounded-xl bg-orange-50 px-3.5 py-3 ring-1 ring-orange-200"
         >
-          <span className="text-lg leading-none">⚡</span>
+          <span aria-hidden className="text-lg leading-none">
+            ⚡
+          </span>
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-semibold text-orange-700">
               출발 전 {plan.origin_precharge.required_pct}% 이상 충전 권장
@@ -558,7 +567,7 @@ export default function MainPage() {
           {plan.congestion_alternative && (
             <div className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs ring-1 ring-sky-200">
               <p className="font-semibold text-sky-800">
-                🕒 {plan.congestion_alternative.note}
+                <span aria-hidden>🕒</span> {plan.congestion_alternative.note}
               </p>
               <p className="mt-1 text-sky-700">
                 피할 곳: {plan.congestion_alternative.avoided.join(", ")}
@@ -713,7 +722,9 @@ export default function MainPage() {
                   }
                   className="mt-3 flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg bg-sky-50 px-3 py-2 text-left text-xs text-sky-700 hover:bg-sky-100"
                 >
-                  <span>🏁 목적지 충전소</span>
+                  <span>
+                    <span aria-hidden>🏁</span> 목적지 충전소
+                  </span>
                   <span className="font-medium">
                     {plan.destination_charging.station_name}
                   </span>
@@ -857,6 +868,10 @@ export default function MainPage() {
           title={naming.addr ? "즐겨찾기 이름" : "이름 수정"}
           initial={naming.initial}
           onClose={() => setNaming(null)}
+          // 신규 등록 중(addr 있음)에는 지울 대상이 없다 → 삭제 버튼도 안 나온다
+          onDelete={
+            naming.addr ? undefined : () => setShortcut(naming.index, null)
+          }
           onSave={(label) => {
             // 신규면 방금 고른 주소를, 수정이면 이미 저장된 주소를 그대로 쓴다
             const addr = naming.addr ?? shortcuts[naming.index]?.addr;
@@ -1046,7 +1061,8 @@ function CongestionBadge({ c }: { c: StationCongestion }) {
           · 대기 {c.wait_lo}~{c.wait_hi}분
         </span>
       )}
-      <span className="text-slate-400">
+      {/* slate-400은 흰 배경에서 2.56:1로 WCAG AA(4.5:1) 미달 → 500(4.77:1) */}
+      <span className="text-slate-500">
         (신뢰도 {c.confidence}
         {c.daytype_fallback === "weekend" && ", 주말 기준"})
       </span>
@@ -1125,11 +1141,17 @@ function Shortcut({
   onClick: () => void;
 }) {
   return (
+    // w-full 필수 — 빈 칸은 이 버튼이 그리드 아이템이라 저절로 늘어나지만, 저장된
+    // 칸은 relative 래퍼가 그리드 아이템이 되어 버튼이 fit-content로 줄어든다.
+    // 빼면 저장 직후 칩만 작아지고 모서리 배지가 칩 밖으로 떨어져 나간다.
     <button
       onClick={onClick}
-      className="flex flex-col items-center gap-1 rounded-xl bg-slate-50 py-2.5 ring-1 ring-slate-200 hover:bg-slate-100 active:scale-[0.98]"
+      className="flex w-full flex-col items-center gap-1 rounded-xl bg-slate-50 py-2.5 ring-1 ring-slate-200 hover:bg-slate-100 active:scale-[0.98]"
     >
-      <span className="text-2xl leading-none">{icon}</span>
+      {/* 아이콘은 장식이다 — aria-hidden이 없으면 스크린리더가 "house 자쿠"로 읽는다 */}
+      <span aria-hidden className="text-2xl leading-none">
+        {icon}
+      </span>
       <span className="text-xs font-medium text-slate-600">{label}</span>
     </button>
   );

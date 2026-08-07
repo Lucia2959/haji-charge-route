@@ -68,10 +68,11 @@ export default function ExplorePage() {
           onClick={() => setPickerOpen(true)}
           className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-left text-sm ring-1 ring-slate-200"
         >
-          <span className={place ? "font-medium" : "text-slate-400"}>
+          {/* slate-400은 흰 배경에서 2.56:1로 WCAG AA(4.5:1) 미달 → 500(4.77:1) */}
+          <span className={place ? "font-medium" : "text-slate-500"}>
             {place ? place.name : "지역을 검색하세요 (예: 강릉시청, 속초해수욕장)"}
           </span>
-          <span aria-hidden className="text-slate-400">
+          <span aria-hidden className="text-slate-500">
             🔍
           </span>
         </button>
@@ -128,7 +129,7 @@ export default function ExplorePage() {
             onSelectStation={(id) => router.push(`/stations/${id}`)}
           />
         ) : (
-          <p className="grid h-full place-items-center p-6 text-center text-sm text-slate-400">
+          <p className="grid h-full place-items-center p-6 text-center text-sm text-slate-500">
             지역을 검색하면 그 시·군·구의 충전소가 지도에 표시됩니다.
           </p>
         )}

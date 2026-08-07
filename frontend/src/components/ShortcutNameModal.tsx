@@ -13,11 +13,14 @@ export default function ShortcutNameModal({
   title,
   initial,
   onSave,
+  onDelete,
   onClose,
 }: {
   title: string;
   initial: string;
   onSave: (name: string) => void;
+  // 이미 등록된 항목을 고칠 때만 온다. 신규 등록 중에는 지울 게 없어 버튼도 없다.
+  onDelete?: () => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial);
@@ -94,6 +97,18 @@ export default function ShortcutNameModal({
           className="rounded-xl border border-slate-200 px-3.5 py-2.5 text-base outline-none focus:border-[var(--byd-accent)]"
         />
         <div className="flex gap-2">
+          {onDelete && (
+            <button
+              onClick={() => {
+                onDelete();
+                onClose();
+              }}
+              // 텍스트 대비 4.5:1 확보용 red-700 (red-500은 흰 배경에서 미달)
+              className="flex-1 rounded-xl bg-red-50 py-2.5 text-sm font-semibold text-red-700 ring-1 ring-red-200"
+            >
+              삭제
+            </button>
+          )}
           <button
             onClick={onClose}
             className="flex-1 rounded-xl bg-slate-100 py-2.5 text-sm font-semibold text-slate-600"
