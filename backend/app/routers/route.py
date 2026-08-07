@@ -41,6 +41,7 @@ from ..services import congestion as congestion_svc
 from ..services import ev_stations, kakao
 from ..services.charging import (
     DOLPHIN_STANDARD,
+    _charge_minutes,
     _haversine_km,
     apply_cruise_speed,
     congestion_extra_kwh,
@@ -257,11 +258,17 @@ async def plan_route(req: RoutePlanRequest) -> RoutePlanResponse:
     #     (짧은 구간이라 '충전 0회'로 나와도 도착 잔량이 바닥이면 출발 전 충전이 필요하다)
     if charge_points:
         first = charge_points[0]
+        # '상태미확인'은 사용불가가 아니라 사업자가 상태를 안 올린 것이다. 이걸
+        # 사용불가로 치면 멀쩡한 충전소 때문에 대체소 도달 여유(8km)가 붙어 출발 전
+        # 필요 충전량이 근거 없이 올라간다. 점검중·운영중지·전용일 때만 여유를 잡는다.
         advice = origin_precharge_advice(
             req.current_charge_pct,
             r_eff,
             first.distance_from_origin_km,
-            target_unavailable=first.available is False,
+            target_unavailable=(
+                first.available is False
+                and first.status_reason != ev_stations.STATUS_UNKNOWN
+            ),
         )
     else:
         advice = origin_precharge_advice(
@@ -463,10 +470,19 @@ async def depart_options(req: RoutePlanRequest) -> DepartOptionsResponse:
     )
 
 
+# 대체 충전소가 지켜야 할 원본 대비 출력 비율. DP는 배정 충전소의 max_power_kw로
+# 충전시간을 계산하므로(charging.py `_charge_minutes`), 출력이 크게 낮은 곳을 대체로
+# 내려보내면 화면의 "28분"이 거짓이 된다 — 100kW 급속 계획에 7kW 완속을 물리면
+# 실제로는 3시간이 넘는다. 0.5로 두면 급속↔완속 경계가 자연히 갈린다
+# (100kW→50kW 하한, 50kW→25kW 하한, 완속 원본→사실상 무조건 통과).
+_ALT_MIN_POWER_RATIO = 0.5
+
+
 async def _enrich_availability(
     charge_points: list[ChargePoint], near_stations: list[StationSummary]
 ) -> None:
     """각 배정 충전소의 실시간 상태를 채우고, 사용불가면 대체 충전소를 찾는다."""
+    by_id = {s.id: s for s in near_stations}
     for cp in charge_points:
         if not cp.station_id:
             continue
@@ -475,9 +491,36 @@ async def _enrich_availability(
             continue
         cp.available, cp.status_reason = res
         if not cp.available and cp.location is not None:
-            cp.alternative = await _find_alternative(
-                cp.location, near_stations, {cp.station_id}
+            orig = by_id.get(cp.station_id)
+            alt = await _find_alternative(
+                cp.location,
+                near_stations,
+                {cp.station_id},
+                min_power_kw=(
+                    orig.max_power_kw * _ALT_MIN_POWER_RATIO if orig else 0.0
+                ),
             )
+            # 충전시간을 대체소 출력으로 다시 계산한다. 원본(예: 100kW) 기준 값을
+            # 그대로 두면 50kW 대체소에서 28분으로 안내되지만 실제로는 33분이다.
+            # 차량 커브가 70kW 근처에서 상한이라 급속끼리는 차이가 작고, 출력이
+            # 낮을수록 급격히 벌어진다(30kW 56분). 총 소요시간에는 반영하지 않는다
+            # — 대체소는 현장에서 쓸지 말지가 정해지는 비상 대안이라, 계획 합계를
+            # 흔들면 오히려 원래 계획을 못 읽는다.
+            if (
+                alt is not None
+                and alt.max_power_kw > 0
+                and cp.charge_from_pct is not None
+                and cp.charge_to_pct is not None
+            ):
+                alt.charge_min = round(
+                    _charge_minutes(
+                        cp.charge_from_pct,
+                        cp.charge_to_pct,
+                        alt.max_power_kw,
+                        DOLPHIN_STANDARD.capacity_kwh,
+                    )
+                )
+            cp.alternative = alt
 
 
 async def _find_alternative(
@@ -486,13 +529,20 @@ async def _find_alternative(
     exclude: set[str],
     radius_km: float = 6.0,
     limit: int = 6,
+    min_power_kw: float = 0.0,
 ) -> AltStation | None:
-    """지점 인근에서 '사용가능'한 대체 충전소를 찾는다 (가까운 순, 최대 limit개 확인)."""
+    """지점 인근에서 '사용가능'한 대체 충전소를 찾는다 (가까운 순, 최대 limit개 확인).
+
+    min_power_kw 미만은 후보에서 아예 뺀다. 조건을 만족하는 곳이 없으면 None을
+    돌려 "대체 없음"으로 두는 편이, 완속을 급속인 척 안내하는 것보다 안전하다.
+    """
     cands = sorted(
         (
             s
             for s in stations
-            if s.id not in exclude and _haversine_km(loc, s.location) <= radius_km
+            if s.id not in exclude
+            and s.max_power_kw >= min_power_kw
+            and _haversine_km(loc, s.location) <= radius_km
         ),
         key=lambda s: _haversine_km(loc, s.location),
     )[:limit]
@@ -505,5 +555,8 @@ async def _find_alternative(
                 location=s.location,
                 available=True,
                 status_reason=res[1],
+                distance_km=round(_haversine_km(loc, s.location), 1),
+                business_name=s.business_name,
+                max_power_kw=s.max_power_kw,
             )
     return None

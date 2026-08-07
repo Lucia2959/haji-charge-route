@@ -29,6 +29,13 @@ export interface AltStation {
   location: LatLng;
   available: boolean;
   status_reason: string;
+  /** 원본 충전소로부터의 직선거리. 같은 부지의 다른 사업자면 0.1km 수준으로 나온다. */
+  distance_km: number;
+  business_name: string | null;
+  /** 대체소 최대 출력. 원본보다 낮으면 계획 충전시간보다 오래 걸린다. */
+  max_power_kw: number;
+  /** 대체소 출력으로 다시 계산한 충전 소요(분). SoC 구간은 원본 계획과 같다. */
+  charge_min: number | null;
 }
 
 export interface ChargePoint {
@@ -166,6 +173,7 @@ export interface StationSummary {
   location: LatLng;
   charger_types: string[];
   max_power_kw: number;
+  business_name: string | null;
   public_access: boolean;
   free_chargers: number | null;
   available: boolean | null;

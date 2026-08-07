@@ -42,13 +42,25 @@ class RoutePlanRequest(BaseModel):
 
 
 class AltStation(BaseModel):
-    """대체 충전소 (배정 충전소가 사용불가일 때)."""
+    """대체 충전소 (배정 충전소가 사용불가일 때).
+
+    같은 휴게소·건물이라도 사업자가 다르면 공공 API는 별개 statId로 준다. 그래서
+    이름만으로는 원본과 구분되지 않는다(실제로 "가평(서울)휴게소 → 대체 가평(서울)
+    휴게소"로 보였다). 운전자가 현장에서 어느 충전기로 갈지 정할 수 있도록
+    거리·사업자명·출력을 함께 내려보낸다.
+    """
 
     station_id: str
     station_name: str
     location: LatLng
     available: bool
     status_reason: str
+    distance_km: float  # 원본 충전소로부터의 직선거리. 0.1km면 같은 부지의 다른 사업자다
+    business_name: Optional[str] = None  # 사업자명 (없으면 화면에서 제외)
+    max_power_kw: float = 0.0  # 대체소 최대 출력. 원본보다 낮으면 계획 충전시간보다 오래 걸린다
+    # 대체소 출력으로 다시 계산한 충전 소요(분). 원본 기준 시간을 그대로 두면
+    # 출력이 낮은 대체소에서 실제보다 짧게 안내된다. SoC 구간은 원본 계획과 같다.
+    charge_min: Optional[float] = None
 
 
 class StationCongestion(BaseModel):
@@ -238,6 +250,7 @@ class StationSummary(BaseModel):
     location: LatLng
     charger_types: list[str]  # ["급속", "완속"]
     max_power_kw: float = 100.0  # 충전소 최대 출력(kW) — DP 충전시간 계산용
+    business_name: Optional[str] = None  # 사업자명 (API: busiNm). 동명 충전소 구분에 쓴다
     # 외부인(비인가자)이 이용 가능한가. 입주민·관계자·특정차량 전용이면 False.
     # 카탈로그의 limitYn/limitDetail로 판정하며, 충전계획 후보에서 제외하는 데 쓴다.
     public_access: bool = True
@@ -251,8 +264,7 @@ class StationDetail(StationSummary):
     usage_restricted: bool  # 이용 제한 여부 (원본 API: limitYn)
     limit_detail: str = ""  # 이용 제한 내용 (API: limitDetail) — 거주/관계자/고객 구분에 사용
     parking_free: bool = True  # 주차 무료 여부 (API: parkingFree). False면 주차비 발생
-    # 설치 정보 (없으면 None → 화면에서 제외)
-    business_name: Optional[str] = None  # 사업자명 (API: busiNm)
+    # 설치 정보 (없으면 None → 화면에서 제외). business_name은 StationSummary에 있다
     address: Optional[str] = None  # 설치 주소 (API: addr + addrDetail)
     use_time: Optional[str] = None  # 이용 가능 시간 (API: useTime)
     install_year: Optional[str] = None  # 설치 연도 (API: year)

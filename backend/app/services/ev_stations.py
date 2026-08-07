@@ -38,16 +38,19 @@ from .charging import _haversine_km, bbox_deg as _bbox_deg, sample_path_points
 # 공공데이터포털이 HTTPS를 지원하므로 HTTP 대신 HTTPS 사용(전송구간 보호)
 EV_API_BASE = "https://apis.data.go.kr/B552584/EvCharger"
 
+# "확실히 불가"(점검중·운영중지·전용)와 구분해야 하는 값. 상태를 보고하지 않는
+# 사업자가 흔해서, 이걸 사용불가로 단정하면 멀쩡한 충전소에 불필요한 여유를 잡는다.
+STATUS_UNKNOWN = "상태미확인"
 # 충전기 상태코드(stat) → 표시 상태. 2:충전대기 3:충전중 4:운영중지 5:점검중 1/9:미확인
 _STAT_LABELS = {
-    "1": "상태미확인",
+    "1": STATUS_UNKNOWN,
     "2": "충전가능",
     "3": "충전중",
     "4": "운영중지",
     "5": "점검중",
-    "9": "상태미확인",
+    "9": STATUS_UNKNOWN,
 }
-_DEFAULT_STATUS = "상태미확인"
+_DEFAULT_STATUS = STATUS_UNKNOWN
 # 충전기 타입(chgerType): 02=AC완속 → 완속, 그 외 → 급속 (일반적 단순화)
 _SLOW_TYPES = {"02"}
 # 충전기 커넥터(chgerType 코드 → 커넥터 명). 없는 코드는 빈 문자열(화면에서 제외).
@@ -405,6 +408,8 @@ def _group_stations(rows: list[dict]) -> dict[str, StationSummary]:
                 location=LatLng(lat=float(lat), lng=float(lng)),
                 charger_types=[ctype],
                 max_power_kw=power,
+                # 사업자명은 카탈로그 로우에 이미 있다 — 상세를 다시 부르지 않는다.
+                business_name=(row.get("busiNm") or row.get("bnm") or "").strip() or None,
                 public_access=access in ("open", "open_fee"),
             )
         else:
@@ -603,7 +608,7 @@ def _availability(detail: StationDetail) -> tuple[bool, str]:
         for reason in ("점검중", "운영중지"):
             if any(c.status == reason for c in detail.chargers):
                 return False, reason
-        return False, "상태미확인"
+        return False, STATUS_UNKNOWN
     if access == "open_fee":
         return True, "외부인 이용가능(주차비 발생)" if not detail.parking_free else "외부인 이용가능"
     return True, "사용가능"

@@ -639,20 +639,47 @@ export default function MainPage() {
                         </span>
                       </div>
                       {cp.available === false && cp.alternative && (
-                        <div className="flex items-center justify-end gap-1.5 rounded-lg bg-emerald-50 px-2 py-1 text-xs">
-                          <span className="text-slate-500">↳ 대체</span>
-                          <StationLink
-                            name={cp.alternative.station_name}
-                            onClick={() =>
-                              router.push(
-                                `/stations/${cp.alternative!.station_id}`
-                              )
-                            }
-                          />
-                          <AvailBadge
-                            available={cp.alternative.available}
-                            reason={cp.alternative.status_reason}
-                          />
+                        <div className="flex flex-col items-end gap-0.5 rounded-lg bg-emerald-50 px-2 py-1 text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-500">↳ 대체</span>
+                            <StationLink
+                              name={cp.alternative.station_name}
+                              onClick={() =>
+                                router.push(
+                                  `/stations/${cp.alternative!.station_id}`
+                                )
+                              }
+                            />
+                            <AvailBadge
+                              available={cp.alternative.available}
+                              reason={cp.alternative.status_reason}
+                            />
+                          </div>
+                          {/* 같은 휴게소라도 사업자가 다르면 이름이 똑같이 나온다.
+                              거리·사업자·출력이 있어야 현장에서 구분이 된다. */}
+                          <span className="text-[11px] text-slate-500">
+                            {cp.alternative.distance_km}km
+                            {cp.alternative.business_name &&
+                              ` · ${cp.alternative.business_name}`}
+                            {cp.alternative.max_power_kw > 0 &&
+                              ` · ${cp.alternative.max_power_kw}kW`}
+                            {/* 출력이 낮으면 계획보다 오래 걸린다 — 대체소 기준
+                                실제 소요를 보여준다. 같으면 표시하지 않는다. */}
+                            {cp.alternative.charge_min != null &&
+                              cp.alternative.charge_min !== cp.charge_min && (
+                                <span
+                                  className={
+                                    cp.charge_min != null &&
+                                    cp.alternative.charge_min > cp.charge_min
+                                      ? "font-semibold text-orange-600"
+                                      : undefined
+                                  }
+                                >
+                                  {" · 충전 "}
+                                  {cp.alternative.charge_min}분
+                                </span>
+                              )}
+                          </span>
                         </div>
                       )}
                     </li>

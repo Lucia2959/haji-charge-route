@@ -76,6 +76,68 @@ assert origin_precharge_advice(50.0, 296.0, 8.5, is_destination=True) is None
 mid = origin_precharge_advice(5.0, 296.0, 8.5)
 assert mid and req_d > mid[0], "목적지 직행 하한(15%)이 중간 충전소보다 높아야 함"
 
+# 5) 대체 충전소는 원본보다 크게 낮은 출력을 고르지 않는다.
+#    DP가 배정 충전소의 max_power_kw로 충전시간을 계산하므로, 100kW 급속 계획에
+#    7kW 완속을 대체로 물리면 화면의 "28분"이 거짓이 된다(실제 3시간+).
+import asyncio as _aio
+
+from app.routers import route as _route
+from app.services import ev_stations as _ev
+
+
+async def _fake_avail(station_id):  # 공공 API를 타지 않고 선정 로직만 검증한다
+    if station_id == "ORIG":  # 원본만 사용불가 → 대체 탐색이 돌게 한다
+        return False, "점검중"
+    return True, "사용가능"
+
+
+_ev.station_availability = _fake_avail
+_orig_loc = LatLng(lat=37.80, lng=127.51)
+_cands = [
+    # 같은 부지·같은 이름의 다른 사업자(공공 API가 statId를 따로 준다) — 완속뿐이다
+    StationSummary(id="SLOW", name="가평(서울)휴게소", business_name="A사",
+                   location=LatLng(lat=37.8005, lng=127.51),
+                   charger_types=["완속"], max_power_kw=7.0),
+    # 2km 밖 급속 — 더 멀어도 이쪽이 선택돼야 한다
+    StationSummary(id="FAST", name="설악휴게소", business_name="B사",
+                   location=LatLng(lat=37.818, lng=127.51),
+                   charger_types=["급속"], max_power_kw=100.0),
+]
+_alt = _aio.run(_route._find_alternative(_orig_loc, _cands, {"ORIG"}, min_power_kw=50.0))
+assert _alt and _alt.station_id == "FAST", f"완속을 대체로 골랐다: {_alt and _alt.station_id}"
+assert _alt.business_name == "B사", "동명 충전소 구분용 사업자명이 비었다"
+assert _alt.distance_km > 0, "대체소 거리가 비었다"
+# 하한을 넘는 후보가 없으면 '대체 없음' — 완속을 급속인 척 안내하지 않는다
+assert _aio.run(
+    _route._find_alternative(_orig_loc, _cands[:1], {"ORIG"}, min_power_kw=50.0)
+) is None, "출력 하한 미달인데 대체를 만들었다"
+
+# 6) 대체소 충전시간은 대체소 출력으로 다시 계산한다.
+#    100kW 계획을 50kW 대체소에 그대로 쓰면 실제보다 짧게 안내된다.
+from app.models import ChargePoint as _CP
+from app.services.charging import DOLPHIN_STANDARD as _VEH, _charge_minutes
+
+_cp = _CP(order=1, distance_from_origin_km=72.1, station_id="ORIG",
+          station_name="가평(서울)휴게소", location=_orig_loc,
+          charge_from_pct=20.0, charge_to_pct=70.0, charge_min=28.0)
+_half = StationSummary(id="HALF", name="가평(서울)휴게소", business_name="C사",
+                       location=LatLng(lat=37.8005, lng=127.51),
+                       charger_types=["급속"], max_power_kw=50.0)
+_aio.run(_route._enrich_availability([_cp], [
+    StationSummary(id="ORIG", name="가평(서울)휴게소", location=_orig_loc,
+                   charger_types=["급속"], max_power_kw=100.0),
+    _half,
+]))
+assert _cp.alternative and _cp.alternative.station_id == "HALF"
+_want = round(_charge_minutes(20.0, 70.0, 50.0, _VEH.capacity_kwh))
+assert _cp.alternative.charge_min == _want, (
+    f"대체소 충전시간 {_cp.alternative.charge_min} != 50kW 재계산 {_want}"
+)
+assert _cp.alternative.charge_min > _cp.charge_min, "출력이 낮은데 시간이 안 늘었다"
+
 print("OK — 절대거리 안전마진(겨울 상향) + 접근성 분류(방문객 우선·차종/집단 차단)")
 print(f"     + 직행 선충전 권장: 5%/8.5km → {req_d}% 권장")
 print(f"     + 목적지 최소잔량: 도착 SoC {dest_arr:.1f}% ≥ {_DEST_MIN_SOC}%")
+print(f"     + 대체 충전소 출력 하한: 완속 배제 → {_alt.station_name} {_alt.max_power_kw}kW")
+print(f"     + 대체소 충전시간 재계산: 100kW {_cp.charge_min:.0f}분 → "
+      f"50kW {_cp.alternative.charge_min:.0f}분")
