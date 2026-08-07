@@ -7,9 +7,11 @@
 // 오해되기 때문. `data_source` 표기로 실데이터/mock을 항상 구분해 보여준다.
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import CarLoader from "@/components/CarLoader";
 import { getStation, saveCharger } from "@/lib/api";
-import type { RealtimeCharger } from "@/lib/types";
+import { TMAP_STORE_ANDROID, TMAP_STORE_IOS, tmapUrl } from "@/lib/tmap";
+import type { LatLng, RealtimeCharger } from "@/lib/types";
 
 export default function StationPage() {
   const router = useRouter();
@@ -60,6 +62,8 @@ export default function StationPage() {
                 {data.name}
               </h2>
             </section>
+
+            <TmapButton name={data.name} location={data.location} />
 
             <Row label="충전기 타입">
               <div className="flex gap-2">
@@ -219,6 +223,39 @@ export default function StationPage() {
         )}
       </div>
     </main>
+  );
+}
+
+// T맵 길안내 연결 — 이 충전소를 도착지로 넣어 T맵 앱을 띄운다.
+// URL 조립·좌표 순서는 lib/tmap.ts에 있고 tmap.test.mjs가 고정한다.
+function TmapButton({ name, location }: { name: string; location: LatLng }) {
+  // 앱 밖으로 나가는 이동이라 button+JS가 아니라 a[href]로 둔다. 스크린리더가
+  // '링크'로 읽고, URL이 DOM에 남아 좌표가 맞는지 눈으로 확인된다.
+  // UA 판정은 클라이언트에서만 가능하므로 마운트 후에 정한다(SSR 불일치 방지).
+  const [android, setAndroid] = useState(false);
+  useEffect(() => setAndroid(/android/i.test(navigator.userAgent)), []);
+
+  // 미설치 안내는 타이머로 감지하지 않고 항상 띄워둔다. iOS는 스킴을 열 때 확인
+  // 대화상자를 띄우는데 그동안 페이지가 hidden이 되지 않아, 시간 기반 감지는
+  // 설치돼 있는데도 "미설치"라고 잘못 말한다.
+  return (
+    <section className="flex flex-col gap-1.5">
+      <a
+        href={tmapUrl(name, location, android)}
+        className="w-full rounded-xl bg-[var(--byd-primary)] py-3 text-center text-sm font-semibold text-white active:scale-[0.99]"
+      >
+        T맵으로 길안내
+      </a>
+      <p className="text-[11px] text-slate-500">
+        T맵이 열리지 않으면 앱이 설치되어 있지 않습니다.{" "}
+        <a
+          href={android ? TMAP_STORE_ANDROID : TMAP_STORE_IOS}
+          className="underline decoration-dotted underline-offset-2"
+        >
+          설치하기
+        </a>
+      </p>
+    </section>
   );
 }
 
