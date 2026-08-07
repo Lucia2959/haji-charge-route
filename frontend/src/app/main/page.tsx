@@ -20,6 +20,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import PlaceSearchModal from "@/components/PlaceSearchModal";
+import ShortcutNameModal from "@/components/ShortcutNameModal";
 import RouteStrip from "@/components/RouteStrip";
 import {
   clearAllRouteData,
@@ -66,6 +67,13 @@ export default function MainPage() {
   const [cruise, setCruise] = useState("");
   // picker: 출발/도착 선택 또는 즐겨찾기 슬롯 지정(shortcut:<index>)
   const [picker, setPicker] = useState<string | null>(null);
+  // 즐겨찾기 이름 입력 중인 슬롯. addr가 있으면 신규 등록(방금 고른 장소),
+  // null이면 이미 등록된 항목의 이름만 고치는 것이다.
+  const [naming, setNaming] = useState<{
+    index: number;
+    initial: string;
+    addr: string | null;
+  } | null>(null);
   const [shortcuts, setShortcuts] = useState<(ShortcutItem | null)[]>(() =>
     Array<ShortcutItem | null>(SHORTCUT_SLOTS).fill(null)
   );
@@ -270,6 +278,15 @@ export default function MainPage() {
                 label={s.label}
                 onClick={() => fillActive(s.addr)}
               />
+              <button
+                onClick={() =>
+                  setNaming({ index: i, initial: s.label, addr: null })
+                }
+                aria-label={`${s.label} 즐겨찾기 이름 수정`}
+                className="absolute -left-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-slate-200 text-[11px] text-slate-600 hover:bg-slate-300"
+              >
+                ✎
+              </button>
               <button
                 onClick={() => setShortcut(i, null)}
                 aria-label={`${s.label} 즐겨찾기 삭제`}
@@ -816,9 +833,11 @@ export default function MainPage() {
           onSelect={(p) => {
             const value = `${p.location.lng},${p.location.lat}`;
             if (picker.startsWith("shortcut:")) {
-              // 즐겨찾기 등록 — 주소는 이 기기에만 저장된다
-              setShortcut(Number(picker.split(":")[1]), {
-                label: p.name,
+              // 장소를 고른 뒤 이름을 직접 정하게 한다(기본값은 검색된 장소명).
+              // 실제 저장은 이름 확정 시 — 주소는 이 기기에만 남는다.
+              setNaming({
+                index: Number(picker.split(":")[1]),
+                initial: p.name,
                 addr: value,
               });
             } else if (picker === "origin") {
@@ -827,6 +846,19 @@ export default function MainPage() {
               setDestination({ label: p.name, value });
             }
             setPicker(null);
+          }}
+        />
+      )}
+
+      {naming && (
+        <ShortcutNameModal
+          title={naming.addr ? "즐겨찾기 이름" : "이름 수정"}
+          initial={naming.initial}
+          onClose={() => setNaming(null)}
+          onSave={(label) => {
+            // 신규면 방금 고른 주소를, 수정이면 이미 저장된 주소를 그대로 쓴다
+            const addr = naming.addr ?? shortcuts[naming.index]?.addr;
+            if (addr) setShortcut(naming.index, { label, addr });
           }}
         />
       )}
