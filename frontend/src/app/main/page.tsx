@@ -119,9 +119,11 @@ export default function MainPage() {
     });
   }
 
-  // 단축 아이콘: 현재 포커스된 칸(출발지/도착지)에 주소 입력
-  function fillActive(address: string) {
-    const place = { label: address, value: address };
+  // 단축 아이콘: 현재 포커스된 칸(출발지/도착지)에 주소 입력.
+  // label은 화면 표시용, value만 API로 나간다 — 즐겨찾기 주소는 "lng,lat"이라
+  // label까지 그대로 쓰면 사용자가 붙인 이름 대신 좌표가 그대로 보인다.
+  function fillActive(address: string, label = address) {
+    const place = { label, value: address };
     if (active === "origin") setOrigin(place);
     else setDestination(place);
   }
@@ -276,7 +278,7 @@ export default function MainPage() {
               <Shortcut
                 icon={SHORTCUT_ICONS[i] ?? "📍"}
                 label={s.label}
-                onClick={() => fillActive(s.addr)}
+                onClick={() => fillActive(s.addr, s.label)}
               />
               <button
                 onClick={() =>
