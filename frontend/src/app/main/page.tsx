@@ -557,7 +557,13 @@ export default function MainPage() {
               disabled={departMut.isPending}
               className="mt-2 w-full rounded-lg bg-white px-3 py-2 text-xs font-semibold text-[var(--byd-primary)] ring-1 ring-slate-200 disabled:opacity-50"
             >
-              {departMut.isPending ? "비교 중…" : "🕒 출발 시각 바꿔서 비교하기"}
+              {departMut.isPending ? (
+                "비교 중…"
+              ) : (
+                <>
+                  <span aria-hidden>🕒</span> 출발 시각 바꿔서 비교하기
+                </>
+              )}
             </button>
           )}
 

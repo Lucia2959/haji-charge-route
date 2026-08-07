@@ -42,8 +42,12 @@
 
 - CSP 헤더 추가 (카카오 SDK가 인라인 스크립트를 써서 `'unsafe-inline'` 필요)
 - 서비스워커(오프라인 셸)
-- 접근성 중간순위 잔여: 이모지 `aria-hidden`, 모달 결과 수 안내,
-  RouteStrip 구간에 `sr-only` 설명, 충전소 표 `role="button"` 행 → 셀 안 버튼으로
+- 접근성 중간순위 잔여: 모달 결과 수 안내, RouteStrip 구간에 `sr-only` 설명,
+  충전소 표 `role="button"` 행 → 셀 안 버튼으로, 10~11px 텍스트 34곳 상향
+  (이모지 `aria-hidden`과 저대비 텍스트는 2026-08-07 적용 완료)
+- 즐겨찾기 주소 역지오코딩 — 이 필드가 생기기 전 등록한 즐겨찾기는 주소가 없다.
+  카카오 `coord2address`로 채울 수 있으나 탭마다 외부 호출이 생겨 캐시가 필요.
+  슬롯이 2개뿐이라 재등록이 더 싸다고 보고 넣지 않았다
 - `charge/page.tsx` 단위 토글을 `role="radiogroup"`으로
 
 ## 자체검증 (변경 후 반드시 실행)
@@ -55,4 +59,5 @@ python test_consumption.py         # 소비모델(온도/속도/회생), 출발 
 python test_external_stability.py  # 재시도·쿼터소진(402) vs 일시제한(429) 구분
 python test_congestion.py          # 혼잡 예측 콜드스타트·추정식·성수기 회귀·zscode 정규화
 cd ../frontend && npx tsc --noEmit
+node src/lib/tmap.test.mjs         # T맵 딥링크 좌표 순서(X=경도/Y=위도)
 ```
