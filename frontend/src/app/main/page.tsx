@@ -43,7 +43,9 @@ import type {
   StationCongestion,
 } from "@/lib/types";
 
-type Place = { label: string; value: string };
+// label = 화면에 보이는 이름, value = 계산에 나가는 값("lng,lat" 또는 주소),
+// address = 등록·검색 시점의 실제 주소(표시 전용, 없으면 안 보여준다)
+type Place = { label: string; value: string; address?: string };
 
 // 즐겨찾기 아이콘(주소는 담지 않는다). 실제 주소는 기기 localStorage에만 저장된다 —
 // NEXT_PUBLIC_ 로 두면 빌드 산출물에 주소가 그대로 박혀 배포 시 노출되기 때문.
@@ -73,6 +75,7 @@ export default function MainPage() {
     index: number;
     initial: string;
     addr: string | null;
+    address?: string;
   } | null>(null);
   const [shortcuts, setShortcuts] = useState<(ShortcutItem | null)[]>(() =>
     Array<ShortcutItem | null>(SHORTCUT_SLOTS).fill(null)
@@ -122,8 +125,9 @@ export default function MainPage() {
   // 단축 아이콘: 현재 포커스된 칸(출발지/도착지)에 주소 입력.
   // label은 화면 표시용, value만 API로 나간다 — 즐겨찾기 주소는 "lng,lat"이라
   // label까지 그대로 쓰면 사용자가 붙인 이름 대신 좌표가 그대로 보인다.
-  function fillActive(address: string, label = address) {
-    const place = { label, value: address };
+  // address는 "회사"가 실제로 어디인지 확인할 수 있게 이름 아래에 함께 보여준다.
+  function fillActive(value: string, label = value, address?: string) {
+    const place = { label, value, address };
     if (active === "origin") setOrigin(place);
     else setDestination(place);
   }
@@ -278,7 +282,7 @@ export default function MainPage() {
               <Shortcut
                 icon={SHORTCUT_ICONS[i] ?? "📍"}
                 label={s.label}
-                onClick={() => fillActive(s.addr, s.label)}
+                onClick={() => fillActive(s.addr, s.label, s.address)}
               />
               {/* 편집 진입점 하나만 둔다. 삭제(✕)를 칩에 같이 붙였더니 저장이 안 된
                   것처럼 읽혔고, 24px 배지 두 개가 손가락으로 눌리지도 않았다.
@@ -325,10 +329,11 @@ export default function MainPage() {
             }}
             className={`input text-left ${active === "origin" ? "input-active" : ""}`}
           >
+            <span aria-hidden className="float-right text-slate-500">🔍</span>
             {origin.label || (
               <span className="text-slate-500">출발지 선택</span>
             )}
-            <span aria-hidden className="float-right text-slate-500">🔍</span>
+            <PlaceAddress place={origin} />
           </button>
         </Field>
         <Field label="도착지">
@@ -341,10 +346,11 @@ export default function MainPage() {
               active === "destination" ? "input-active" : ""
             }`}
           >
+            <span aria-hidden className="float-right text-slate-500">🔍</span>
             {destination.label || (
               <span className="text-slate-500">도착지 선택</span>
             )}
-            <span aria-hidden className="float-right text-slate-500">🔍</span>
+            <PlaceAddress place={destination} />
           </button>
         </Field>
         <div className="flex gap-3 [&>label]:flex-1">
@@ -848,15 +854,18 @@ export default function MainPage() {
             if (picker.startsWith("shortcut:")) {
               // 장소를 고른 뒤 이름을 직접 정하게 한다(기본값은 검색된 장소명).
               // 실제 저장은 이름 확정 시 — 주소는 이 기기에만 남는다.
+              // 이때 실제 주소도 같이 넘긴다. 지금 안 담아두면 나중에 좌표로
+              // 되살릴 방법이 없다(역지오코딩 엔드포인트가 없다).
               setNaming({
                 index: Number(picker.split(":")[1]),
                 initial: p.name,
                 addr: value,
+                address: p.address,
               });
             } else if (picker === "origin") {
-              setOrigin({ label: p.name, value });
+              setOrigin({ label: p.name, value, address: p.address });
             } else {
-              setDestination({ label: p.name, value });
+              setDestination({ label: p.name, value, address: p.address });
             }
             setPicker(null);
           }}
@@ -873,9 +882,12 @@ export default function MainPage() {
             naming.addr ? undefined : () => setShortcut(naming.index, null)
           }
           onSave={(label) => {
-            // 신규면 방금 고른 주소를, 수정이면 이미 저장된 주소를 그대로 쓴다
-            const addr = naming.addr ?? shortcuts[naming.index]?.addr;
-            if (addr) setShortcut(naming.index, { label, addr });
+            // 신규면 방금 고른 주소를, 수정이면 이미 저장된 주소를 그대로 쓴다.
+            // 이름만 고칠 때 기존 address를 잃지 않도록 함께 넘긴다.
+            const cur = shortcuts[naming.index];
+            const addr = naming.addr ?? cur?.addr;
+            const address = naming.addr ? naming.address : cur?.address;
+            if (addr) setShortcut(naming.index, { label, addr, address });
           }}
         />
       )}
@@ -1154,6 +1166,18 @@ function Shortcut({
       </span>
       <span className="text-xs font-medium text-slate-600">{label}</span>
     </button>
+  );
+}
+
+// 이름 아래 실제 주소 한 줄. "회사"가 어디인지 확인시켜 주는 용도라
+// 이름과 같은 문자열이면 중복이니 표시하지 않는다.
+// 이 필드가 생기기 전 등록한 즐겨찾기에는 address가 없어 그냥 빠진다.
+function PlaceAddress({ place }: { place: Place }) {
+  if (!place.address || place.address === place.label) return null;
+  return (
+    <span className="mt-0.5 block truncate text-xs font-normal text-slate-500">
+      {place.address}
+    </span>
   );
 }
 

@@ -279,8 +279,8 @@ export function clearPlan() {
 const FORM_KEY = "haji.mainForm";
 
 export interface MainFormState {
-  origin: { label: string; value: string };
-  destination: { label: string; value: string };
+  origin: { label: string; value: string; address?: string };
+  destination: { label: string; value: string; address?: string };
   charge: string;
   temp: string;
   tempAuto: boolean;
@@ -339,6 +339,10 @@ export const SHORTCUT_SLOTS = 2;
 export interface ShortcutItem {
   label: string;
   addr: string; // "lng,lat" 또는 주소 문자열
+  // 등록 시점의 실제 주소(예: "서울 양천구 목동서로 100"). 화면 표시 전용이고
+  // 계산에는 쓰지 않는다 — 계산은 항상 addr(좌표)로 한다.
+  // 이 필드가 생기기 전에 등록한 즐겨찾기에는 없다(undefined) → 그 경우 표시만 생략.
+  address?: string;
 }
 
 export function loadShortcuts(): (ShortcutItem | null)[] {
